@@ -1,0 +1,6 @@
+name = "invoicely"
+compatibility_date = "2025-06-10"
+pages_build_output_dir = ".vercel/output/static"
+
+[env.production]
+vars = { NEXT_PUBLIC_API_URL = "https://api.yourdomain.com/api" }
