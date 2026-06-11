@@ -2,20 +2,46 @@
 
 import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
-import { ArrowLeft, Edit, CheckCircle2, DollarSign, UserCheck, UserX } from "lucide-react";
+import { ArrowLeft, Edit, CheckCircle2, DollarSign, UserCheck, UserX, Loader2 } from "lucide-react";
 import { formatCurrency, formatDate, calculateTotalExpenses, calculateShare, calculateMemberBalance, calculateSettlements } from "@/lib/utils";
-import { mockBills } from "@/lib/mock-data";
+import { billApi } from "@/lib/api";
+import type { Bill } from "@/types";
 
 export default function BillViewPage() {
   const params = useParams();
   const router = useRouter();
-  const bill = mockBills.find((b) => b.id === params.id);
+  const queryClient = useQueryClient();
 
-  if (!bill) {
+  const { data: res, isLoading, error } = useQuery({
+    queryKey: ["bill", params.id],
+    queryFn: () => billApi.get(params.id as string),
+    enabled: !!params.id,
+  });
+
+  const settleMutation = useMutation({
+    mutationFn: () => billApi.settle(params.id as string),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["bill", params.id] });
+      queryClient.invalidateQueries({ queryKey: ["bills"] });
+    },
+  });
+
+  const bill: Bill | undefined = res?.data;
+
+  if (isLoading) {
+    return (
+      <div className="flex items-center justify-center py-24">
+        <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
+      </div>
+    );
+  }
+
+  if (error || !bill) {
     return (
       <div className="flex flex-col items-center justify-center py-24 text-center">
         <h2 className="text-xl font-semibold text-foreground">Bill not found</h2>
@@ -62,9 +88,9 @@ export default function BillViewPage() {
         </div>
         <div className="flex items-center gap-2">
           {bill.status === "open" && (
-            <Button className="gap-1">
+            <Button className="gap-1" onClick={() => settleMutation.mutate()} disabled={settleMutation.isPending}>
               <CheckCircle2 className="h-4 w-4" />
-              Settle Up
+              {settleMutation.isPending ? "Settling..." : "Settle Up"}
             </Button>
           )}
           <Link href={`/bills/${bill.id}/edit`}>
