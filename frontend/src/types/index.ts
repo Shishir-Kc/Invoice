@@ -48,7 +48,7 @@ export interface PaginatedResponse<T> {
 export interface CreateBillInput {
   title: string;
   description?: string;
-  members: Omit<Member, "id">[];
+  members: Member[];
   expenses: Omit<Expense, "id">[];
 }
 
