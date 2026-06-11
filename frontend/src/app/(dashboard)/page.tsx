@@ -1,41 +1,66 @@
 "use client";
 
 import Link from "next/link";
+import { useQuery } from "@tanstack/react-query";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Receipt, DollarSign, Users, CheckCircle2, TrendingUp, ArrowUpRight } from "lucide-react";
+import { Receipt, DollarSign, Users, CheckCircle2, TrendingUp, ArrowUpRight, Loader2 } from "lucide-react";
 import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from "recharts";
-import { mockBills } from "@/lib/mock-data";
+import { billApi } from "@/lib/api";
 import { calculateTotalExpenses } from "@/lib/utils";
 import { format } from "date-fns";
-
-const totalBills = mockBills.length;
-const totalSpent = mockBills.reduce((sum, b) => sum + calculateTotalExpenses(b.expenses), 0);
-const settledBills = mockBills.filter((b) => b.status === "settled").length;
-const memberSet = new Set(mockBills.flatMap((b) => b.members.map((m) => m.id)));
-
-const stats = [
-  { label: "Total Bills", value: String(totalBills), icon: Receipt, change: "5 total", color: "text-blue-500" },
-  { label: "Total Spent", value: `NPR ${totalSpent.toFixed(2)}`, icon: DollarSign, change: `NPR ${totalSpent.toFixed(2)} overall`, color: "text-green-500" },
-  { label: "Members", value: String(memberSet.size), icon: Users, change: "across all bills", color: "text-purple-500" },
-  { label: "Settled Bills", value: String(settledBills), icon: CheckCircle2, change: `${Math.round((settledBills / totalBills) * 100)}% settled`, color: "text-emerald-500" },
-];
-
-const spendingData = [
-  { month: "Jan", amount: 0 },
-  { month: "Feb", amount: 0 },
-  { month: "Mar", amount: 0 },
-  { month: "Apr", amount: 0 },
-  { month: "May", amount: 89.20 },
-  { month: "Jun", amount: 493.61 },
-];
-
-const chartTotal = spendingData.reduce((sum, d) => sum + d.amount, 0);
-
-const recentBills = mockBills
-  .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
-  .slice(0, 3);
+import type { Bill } from "@/types";
 
 export default function DashboardPage() {
+  const { data: res, isLoading, error } = useQuery({
+    queryKey: ["bills", "dashboard"],
+    queryFn: () => billApi.list({ page: 1, pageSize: 100 }),
+  });
+
+  if (isLoading) {
+    return (
+      <div className="flex items-center justify-center py-24">
+        <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
+      </div>
+    );
+  }
+
+  if (error) {
+    return (
+      <div className="flex flex-col items-center justify-center py-24 text-center">
+        <h2 className="text-xl font-semibold text-foreground">Failed to load data</h2>
+        <p className="text-muted-foreground text-sm mt-1">Please check your connection and try again.</p>
+      </div>
+    );
+  }
+
+  const bills: Bill[] = res?.data?.data ?? [];
+  const totalBills = bills.length;
+  const totalSpent = bills.reduce((sum: number, b) => sum + calculateTotalExpenses(b.expenses), 0);
+  const settledBills = bills.filter((b) => b.status === "settled").length;
+  const memberSet = new Set(bills.flatMap((b: Bill) => b.members.map((m) => m.id)));
+
+  const stats = [
+    { label: "Total Bills", value: String(totalBills), icon: Receipt, change: `${totalBills} total`, color: "text-blue-500" },
+    { label: "Total Spent", value: `NPR ${totalSpent.toFixed(2)}`, icon: DollarSign, change: `NPR ${totalSpent.toFixed(2)} overall`, color: "text-green-500" },
+    { label: "Members", value: String(memberSet.size), icon: Users, change: "across all bills", color: "text-purple-500" },
+    { label: "Settled Bills", value: String(settledBills), icon: CheckCircle2, change: `${totalBills > 0 ? Math.round((settledBills / totalBills) * 100) : 0}% settled`, color: "text-emerald-500" },
+  ];
+
+  const spendingData = [
+    { month: "Jan", amount: 0 },
+    { month: "Feb", amount: 0 },
+    { month: "Mar", amount: 0 },
+    { month: "Apr", amount: 0 },
+    { month: "May", amount: 0 },
+    { month: "Jun", amount: totalSpent },
+  ];
+
+  const chartTotal = spendingData.reduce((sum, d) => sum + d.amount, 0);
+
+  const recentBills = bills
+    .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
+    .slice(0, 3);
+
   return (
     <div className="space-y-6">
       <div>
