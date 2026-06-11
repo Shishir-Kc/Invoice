@@ -1,18 +1,19 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Select } from "@/components/ui/select";
-import { Trash2, Plus, ArrowLeft, UserPlus } from "lucide-react";
+import { Trash2, Plus, ArrowLeft, UserPlus, Loader2 } from "lucide-react";
 import { formatCurrency } from "@/lib/utils";
-import { mockBills } from "@/lib/mock-data";
-import type { Member, Expense } from "@/types";
+import { billApi } from "@/lib/api";
+import type { Member, Expense, UpdateBillInput } from "@/types";
 
 const emptyMember = (): Member => ({
   id: crypto.randomUUID(),
@@ -31,17 +32,38 @@ const emptyExpense = (): Expense => ({
 export default function EditBillPage() {
   const params = useParams();
   const router = useRouter();
-  const existing = mockBills.find((b) => b.id === params.id);
+  const queryClient = useQueryClient();
 
-  const [title, setTitle] = useState(existing?.title ?? "");
-  const [description, setDescription] = useState(existing?.description ?? "");
-  const [members, setMembers] = useState<Member[]>(
-    existing?.members ?? [emptyMember()]
-  );
-  const [expenses, setExpenses] = useState<Expense[]>(
-    existing?.expenses ?? [emptyExpense()]
-  );
+  const { data: res, isLoading } = useQuery({
+    queryKey: ["bill", params.id],
+    queryFn: () => billApi.get(params.id as string),
+    enabled: !!params.id,
+  });
+
+  const existing = res?.data;
+
+  const [title, setTitle] = useState("");
+  const [description, setDescription] = useState("");
+  const [members, setMembers] = useState<Member[]>([emptyMember()]);
+  const [expenses, setExpenses] = useState<Expense[]>([emptyExpense()]);
   const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    if (existing) {
+      setTitle(existing.title);
+      setDescription(existing.description ?? "");
+      setMembers(existing.members.map((m: Member) => ({ ...m })));
+      setExpenses(existing.expenses.map((e: Expense) => ({ ...e })));
+    }
+  }, [existing]);
+
+  const updateMutation = useMutation({
+    mutationFn: (data: UpdateBillInput) => billApi.update(data),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["bills"] });
+      router.push("/bills");
+    },
+  });
 
   const addMember = () => setMembers([...members, emptyMember()]);
   const removeMember = (id: string) => {
@@ -73,9 +95,45 @@ export default function EditBillPage() {
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setSaving(true);
-    await new Promise((r) => setTimeout(r, 1000));
-    router.push("/bills");
+    try {
+      const input: UpdateBillInput = {
+        id: params.id as string,
+        title,
+        description: description || undefined,
+        members: members.map((m) => ({ id: m.id, name: m.name, email: m.email || "" })),
+        expenses: expenses.map((e) => ({
+          description: e.description,
+          amount: e.amount,
+          paidBy: e.paidBy,
+          date: e.date,
+        })),
+      };
+      await updateMutation.mutateAsync(input);
+    } catch (err) {
+      console.error("Failed to update bill", err);
+    } finally {
+      setSaving(false);
+    }
   };
+
+  if (isLoading) {
+    return (
+      <div className="flex items-center justify-center py-24">
+        <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
+      </div>
+    );
+  }
+
+  if (!existing) {
+    return (
+      <div className="flex flex-col items-center justify-center py-24 text-center">
+        <h2 className="text-xl font-semibold text-foreground">Bill not found</h2>
+        <Link href="/bills" className="mt-4">
+          <Button variant="outline">Back to Bills</Button>
+        </Link>
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-6 max-w-4xl mx-auto">
