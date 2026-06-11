@@ -2,23 +2,41 @@
 
 import { useState } from "react";
 import Link from "next/link";
+import { useQuery } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
-import { Plus, Search, Receipt, MoreHorizontal, Eye, Users } from "lucide-react";
+import { Plus, Search, Receipt, Eye, Users, Loader2 } from "lucide-react";
 import { formatCurrency, calculateTotalExpenses } from "@/lib/utils";
-import { mockBills } from "@/lib/mock-data";
+import { billApi } from "@/lib/api";
+import type { Bill } from "@/types";
 
 export default function BillsPage() {
   const [search, setSearch] = useState("");
-  const bills = mockBills;
-
-  const filteredBills = bills.filter((b) => {
-    if (!search) return true;
-    const q = search.toLowerCase();
-    return b.title.toLowerCase().includes(q);
+  const { data: res, isLoading, error } = useQuery({
+    queryKey: ["bills", search],
+    queryFn: () => billApi.list({ search, page: 1, pageSize: 50 }),
   });
+
+  if (isLoading) {
+    return (
+      <div className="flex items-center justify-center py-24">
+        <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
+      </div>
+    );
+  }
+
+  if (error) {
+    return (
+      <div className="flex flex-col items-center justify-center py-24 text-center">
+        <h2 className="text-xl font-semibold text-foreground">Failed to load bills</h2>
+        <p className="text-muted-foreground text-sm mt-1">Please check your connection and try again.</p>
+      </div>
+    );
+  }
+
+  const bills: Bill[] = res?.data?.data ?? [];
 
   return (
     <div className="space-y-6">
@@ -50,7 +68,7 @@ export default function BillsPage() {
           </div>
         </CardHeader>
         <CardContent className="p-0">
-          {filteredBills.length === 0 ? (
+          {bills.length === 0 ? (
             <div className="flex flex-col items-center justify-center py-16 text-center">
               <Receipt className="h-16 w-16 text-muted-foreground/30 mb-4" />
               <h3 className="text-lg font-semibold text-foreground">No bills yet</h3>
@@ -66,7 +84,7 @@ export default function BillsPage() {
             </div>
           ) : (
             <div className="divide-y divide-border">
-              {filteredBills.map((bill) => {
+              {bills.map((bill) => {
                 const total = calculateTotalExpenses(bill.expenses);
                 return (
                   <div key={bill.id} className="flex items-center justify-between px-6 py-4 hover:bg-accent/50 transition-colors">
@@ -97,9 +115,6 @@ export default function BillsPage() {
                             <Eye className="h-4 w-4" />
                           </Button>
                         </Link>
-                        <Button variant="ghost" size="icon" className="h-8 w-8">
-                          <MoreHorizontal className="h-4 w-4" />
-                        </Button>
                       </div>
                     </div>
                   </div>
