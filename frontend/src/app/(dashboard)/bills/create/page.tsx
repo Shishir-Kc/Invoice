@@ -11,7 +11,8 @@ import { Textarea } from "@/components/ui/textarea";
 import { Select } from "@/components/ui/select";
 import { Trash2, Plus, ArrowLeft, UserPlus } from "lucide-react";
 import { formatCurrency } from "@/lib/utils";
-import type { Member, Expense } from "@/types";
+import { billApi } from "@/lib/api";
+import type { Member, Expense, CreateBillInput } from "@/types";
 
 const emptyMember = (): Member => ({
   id: crypto.randomUUID(),
@@ -65,9 +66,25 @@ export default function CreateBillPage() {
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setSaving(true);
-    await new Promise((r) => setTimeout(r, 1000));
-    router.push("/bills");
-    setSaving(false);
+    try {
+      const input: CreateBillInput = {
+        title,
+        description: description || undefined,
+        members: members.map((m) => ({ id: m.id, name: m.name, email: m.email || "" })),
+        expenses: expenses.map((e) => ({
+          description: e.description,
+          amount: e.amount,
+          paidBy: e.paidBy,
+          date: e.date,
+        })),
+      };
+      await billApi.create(input);
+      router.push("/bills");
+    } catch (err) {
+      console.error("Failed to create bill", err);
+    } finally {
+      setSaving(false);
+    }
   };
 
   return (
