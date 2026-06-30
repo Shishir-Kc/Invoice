@@ -21,14 +21,12 @@ export interface AuthUser {
 
 interface AuthState {
   user: AuthUser | null;
-  token: string | null;
   isAuthenticated: boolean;
   loading: boolean;
-  login: (token: string, user: AuthUser) => void;
-  logout: () => void;
+  login: (user: AuthUser) => void;
+  logout: () => Promise<void>;
 }
 
-const TOKEN_KEY = "invoicely_token";
 const USER_KEY = "invoicely_user";
 
 const AuthContext = createContext<AuthState | undefined>(undefined);
@@ -43,73 +41,80 @@ function readStoredUser(): AuthUser | null {
 }
 
 export function AuthProvider({ children }: { children: ReactNode }) {
-  const [token, setToken] = useState<string | null>(null);
   const [user, setUser] = useState<AuthUser | null>(null);
   const [loading, setLoading] = useState(true);
 
-  // Hydrate from localStorage on mount, then refresh from the server so the
-  // user object is authoritative (e.g. hyperId, which gates official-only UI).
-  // We keep the stored user while the refresh is in flight so the app can
-  // render immediately; the refresh then corrects/updates it.
+  // The session token lives in an HttpOnly cookie set by the backend — it is
+  // never accessible to JS, so we don't store or read it here. We keep a
+  // cached user object in localStorage purely for instant first paint; the
+  // server (/me via the cookie) is the source of truth and corrects it.
   useEffect(() => {
     let cancelled = false;
-    const storedToken = localStorage.getItem(TOKEN_KEY);
     const storedUser = readStoredUser();
-    if (storedToken && storedUser) {
+    if (storedUser) {
       // eslint-disable-next-line react-hooks/set-state-in-effect
-      setToken(storedToken);
       setUser(storedUser);
-      // Refresh in the background; ignore network failures (keep stored user).
-      authApi
-        .me()
-        .then(({ data: resp }) => {
-          if (cancelled) return;
-          const u = resp.data;
-          const refreshed: AuthUser = {
-            id: u.id,
-            email: u.email,
-            name: u.name,
-            accountType: u.accountType,
-            hyperId: u.hyperId,
-          };
-          localStorage.setItem(USER_KEY, JSON.stringify(refreshed));
-          setUser(refreshed);
-        })
-        .catch(() => {
-          // A 401 is handled by the axios interceptor (clears auth + redirects).
-          // Other transient errors: keep the stored user as-is.
-        });
     }
-    setLoading(false);
+    // Always validate against the server using the HttpOnly cookie. If the
+    // cookie is missing/expired, /me returns 401 and we clear the cached user.
+    authApi
+      .me()
+      .then(({ data: resp }) => {
+        if (cancelled) return;
+        const u = resp.data;
+        const refreshed: AuthUser = {
+          id: u.id,
+          email: u.email,
+          name: u.name,
+          accountType: u.accountType,
+          hyperId: u.hyperId,
+        };
+        localStorage.setItem(USER_KEY, JSON.stringify(refreshed));
+        setUser(refreshed);
+      })
+      .catch(() => {
+        if (cancelled) return;
+        // 401 is also handled by the axios interceptor (clears user + may
+        // redirect). For any failure, drop the cached user so we don't show
+        // a stale identity.
+        localStorage.removeItem(USER_KEY);
+        setUser(null);
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
     return () => {
       cancelled = true;
     };
   }, []);
 
-  const login = useCallback((newToken: string, newUser: AuthUser) => {
-    localStorage.setItem(TOKEN_KEY, newToken);
+  const login = useCallback((newUser: AuthUser) => {
+    // The backend already set the HttpOnly session cookie in the response
+    // that preceded this call. We only need to cache the user object.
     localStorage.setItem(USER_KEY, JSON.stringify(newUser));
-    setToken(newToken);
     setUser(newUser);
   }, []);
 
-  const logout = useCallback(() => {
-    localStorage.removeItem(TOKEN_KEY);
+  const logout = useCallback(async () => {
+    // Tell the backend to delete the session row + clear the cookie.
+    try {
+      await authApi.logout();
+    } catch {
+      // Network/401 errors are fine — the cookie may already be gone.
+    }
     localStorage.removeItem(USER_KEY);
-    setToken(null);
     setUser(null);
   }, []);
 
   const value = useMemo<AuthState>(
     () => ({
       user,
-      token,
-      isAuthenticated: !!token && !!user,
+      isAuthenticated: !!user,
       loading,
       login,
       logout,
     }),
-    [user, token, loading, login, logout],
+    [user, loading, login, logout],
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
@@ -123,4 +128,4 @@ export function useAuth(): AuthState {
   return ctx;
 }
 
-export { TOKEN_KEY, USER_KEY };
+export { USER_KEY };
