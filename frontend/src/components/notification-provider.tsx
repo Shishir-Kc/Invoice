@@ -29,7 +29,7 @@ const NotificationContext = createContext<NotificationContextValue | null>(null)
 
 export function NotificationProvider({ children }: { children: ReactNode }) {
   const qc = useQueryClient();
-  const { token, isAuthenticated } = useAuth();
+  const { isAuthenticated } = useAuth();
 
   // Poll the backend notification feed. The list comes back ordered by
   // created_at desc, so notifications[0] is the newest. Only fetch when
@@ -38,8 +38,8 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
   const { data: res } = useQuery({
     queryKey: ["notifications"],
     queryFn: () => notificationApi.list(),
-    enabled: !!token && isAuthenticated,
-    refetchInterval: !!token && isAuthenticated ? 15_000 : false,
+    enabled: isAuthenticated,
+    refetchInterval: isAuthenticated ? 15_000 : false,
     refetchOnWindowFocus: true,
   });
 
