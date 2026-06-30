@@ -77,14 +77,15 @@ function JoinForm() {
         email: data.email,
         password: data.password,
       });
-      const { token: sessionToken, user } = resp.data;
+      const { alreadyOfficial, user } = resp.data;
       const message = resp.message;
-      if (!sessionToken) {
-        // Official HYPER user — ask them to log in via HYPER instead.
+      if (alreadyOfficial) {
+        // Official HYPER user — ask them to log in via HYPER instead. No
+        // session cookie was set, so don't log them in here.
         setServerError(message || "Please log in via HYPER instead.");
         return;
       }
-      login(sessionToken, {
+      login({
         id: user.id,
         email: user.email,
         name: user.name,
