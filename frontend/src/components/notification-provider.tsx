@@ -1,55 +1,19 @@
 "use client";
 
-import { createContext, useContext, useState, useEffect, useCallback, type ReactNode } from "react";
-import type { Notification, NotificationType } from "@/types";
-import { mockNotifications, mockMembers, mockBills } from "@/lib/mock-data";
-
-const descriptions: Record<NotificationType, string[]> = {
-  bill_added: [
-    `${mockMembers[1].name} created a new bill — ${mockBills[0].title}`,
-    `${mockMembers[2].name} added ${mockBills[2].title} to the group`,
-    `New expense "${mockBills[1].title}" needs your review`,
-  ],
-  payment_received: [
-    `${mockMembers[1].name} sent you a payment`,
-    `${mockMembers[2].name} paid their share`,
-    `${mockMembers[3].name} settled up for ${mockBills[0].title}`,
-  ],
-  member_joined: [
-    `${mockMembers[1].name} joined the group`,
-    `${mockMembers[2].name} is now a member`,
-    `${mockMembers[3].name} has been added by an admin`,
-  ],
-  bill_settled: [
-    `${mockBills[0].title} has been fully settled`,
-    `${mockBills[2].title} is now closed`,
-    `All balances cleared for ${mockBills[4].title}`,
-  ],
-};
-
-const liveTitles: Record<NotificationType, string> = {
-  bill_added: "New Bill",
-  payment_received: "Payment Received",
-  member_joined: "Member Joined",
-  bill_settled: "Bill Settled",
-};
-
-let liveId = 100;
-
-function generateLiveNotification(): Notification {
-  const types: NotificationType[] = ["bill_added", "payment_received", "member_joined", "bill_settled"];
-  const type = types[Math.floor(Math.random() * types.length)];
-  const pool = descriptions[type];
-  const description = pool[Math.floor(Math.random() * pool.length)];
-  return {
-    id: `live-${liveId++}`,
-    type,
-    title: liveTitles[type],
-    description,
-    time: new Date().toISOString(),
-    read: false,
-  };
-}
+import {
+  createContext,
+  useContext,
+  useEffect,
+  useRef,
+  useState,
+  useCallback,
+  useMemo,
+  type ReactNode,
+} from "react";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { notificationApi } from "@/lib/api";
+import { useAuth } from "@/components/auth-provider";
+import type { Notification } from "@/types";
 
 interface NotificationContextValue {
   notifications: Notification[];
@@ -64,33 +28,77 @@ interface NotificationContextValue {
 const NotificationContext = createContext<NotificationContextValue | null>(null);
 
 export function NotificationProvider({ children }: { children: ReactNode }) {
-  const [notifications, setNotifications] = useState<Notification[]>(mockNotifications);
+  const qc = useQueryClient();
+  const { token, isAuthenticated } = useAuth();
+
+  // Poll the backend notification feed. The list comes back ordered by
+  // created_at desc, so notifications[0] is the newest. Only fetch when
+  // authenticated — this avoids firing (and 401-ing) on public pages like
+  // /login and /join, which would otherwise trigger the axios 401 redirect.
+  const { data: res } = useQuery({
+    queryKey: ["notifications"],
+    queryFn: () => notificationApi.list(),
+    enabled: !!token && isAuthenticated,
+    refetchInterval: !!token && isAuthenticated ? 15_000 : false,
+    refetchOnWindowFocus: true,
+  });
+
+  const notifications: Notification[] = useMemo(
+    () => res?.data?.data ?? [],
+    [res],
+  );
+
+  // Surface a toast only for notifications that arrive *after* mount —
+  // existing ones on first load are not toasted.
+  const seenIdRef = useRef<string | null>(null);
   const [latestNotification, setLatestNotification] = useState<Notification | null>(null);
 
   useEffect(() => {
-    const interval = setInterval(() => {
-      const n = generateLiveNotification();
-      setNotifications((prev) => [n, ...prev]);
-      setLatestNotification(n);
-    }, 60000);
-    return () => clearInterval(interval);
-  }, []);
+    if (notifications.length === 0) return;
+    const newest = notifications[0];
+    if (seenIdRef.current === null) {
+      seenIdRef.current = newest.id;
+      return;
+    }
+    if (newest.id !== seenIdRef.current) {
+      seenIdRef.current = newest.id;
+      setLatestNotification(newest);
+    }
+  }, [notifications]);
+
+  const invalidate = useCallback(
+    () => qc.invalidateQueries({ queryKey: ["notifications"] }),
+    [qc],
+  );
+
+  const updateMut = useMutation({
+    mutationFn: ({ id, read }: { id: string; read: boolean }) =>
+      notificationApi.update(id, read),
+    onSuccess: invalidate,
+  });
+
+  const markAllMut = useMutation({
+    mutationFn: () => notificationApi.markAllRead(),
+    onSuccess: invalidate,
+  });
+
+  const clearAllMut = useMutation({
+    mutationFn: () => notificationApi.clearAll(),
+    onSuccess: invalidate,
+  });
 
   const clearLatest = useCallback(() => setLatestNotification(null), []);
 
-  const toggleRead = useCallback((id: string) => {
-    setNotifications((prev) =>
-      prev.map((n) => (n.id === id ? { ...n, read: !n.read } : n))
-    );
-  }, []);
+  const toggleRead = useCallback(
+    (id: string) => {
+      const current = notifications.find((n) => n.id === id);
+      updateMut.mutate({ id, read: !current?.read });
+    },
+    [notifications, updateMut],
+  );
 
-  const markAllRead = useCallback(() => {
-    setNotifications((prev) => prev.map((n) => ({ ...n, read: true })));
-  }, []);
-
-  const clearAll = useCallback(() => {
-    setNotifications([]);
-  }, []);
+  const markAllRead = useCallback(() => markAllMut.mutate(), [markAllMut]);
+  const clearAll = useCallback(() => clearAllMut.mutate(), [clearAllMut]);
 
   const unreadCount = notifications.filter((n) => !n.read).length;
 
