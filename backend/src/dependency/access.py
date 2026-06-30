@@ -5,6 +5,20 @@ from typing import Tuple
 
 from Schema.bill import User
 
+
+def _as_aware_utc(dt: datetime) -> datetime:
+    """Normalize a datetime to UTC-aware.
+
+    Some DB drivers (notably SQLite) return naive datetimes even for
+    ``TIMESTAMP WITH TIME ZONE`` columns. Comparing a naive value against
+    ``datetime.now(timezone.utc)`` raises, so coerce naive values to UTC
+    before comparing. Values that are already aware are returned unchanged.
+    """
+    if dt.tzinfo is None:
+        return dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc)
+
+
 UNIT_SECONDS: dict[str, int] = {
     "hour": 3600,
     "day": 86400,
@@ -41,7 +55,7 @@ def has_access(user: User) -> bool:
         return False
     if user.access_expires_at is None:
         return True  # permanent unofficial
-    return user.access_expires_at > datetime.now(timezone.utc)
+    return _as_aware_utc(user.access_expires_at) > datetime.now(timezone.utc)
 
 
 def access_status(user: User) -> str:
@@ -52,7 +66,7 @@ def access_status(user: User) -> str:
         return "banned"
     if user.access_expires_at is None:
         return "permanent"
-    if user.access_expires_at <= datetime.now(timezone.utc):
+    if _as_aware_utc(user.access_expires_at) <= datetime.now(timezone.utc):
         return "expired"
     return "active"
 
@@ -66,5 +80,5 @@ def extend_expiry(user: User, amount: int, unit: str) -> datetime | None:
     """
     now = datetime.now(timezone.utc)
     current = user.access_expires_at
-    base = current if (current and current > now) else now
+    base = current if (current and _as_aware_utc(current) > now) else now
     return base + duration_to_timedelta(amount, unit)
