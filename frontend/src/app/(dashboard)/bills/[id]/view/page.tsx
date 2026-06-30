@@ -1,6 +1,6 @@
 "use client";
 
-import { useParams, useRouter } from "next/navigation";
+import { useParams } from "next/navigation";
 import Link from "next/link";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
@@ -14,7 +14,6 @@ import type { Bill } from "@/types";
 
 export default function BillViewPage() {
   const params = useParams();
-  const router = useRouter();
   const queryClient = useQueryClient();
 
   const { data: res, isLoading, error } = useQuery({
