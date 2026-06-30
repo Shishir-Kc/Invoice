@@ -7,7 +7,10 @@ from fastapi import APIRouter, HTTPException, Query
 from sqlmodel import Session, select, func
 
 from dependency.db import session_dep
+from dependency.current_user import current_user_dep
+from dependency.access import is_official
 from Schema.bill import Bill, User, BillMember, Expense
+from Schema.notification import Notification
 from Schema.api import (
     ApiResponse,
     PaginatedResponse,
@@ -17,6 +20,7 @@ from Schema.api import (
     MemberOut,
     ExpenseOut,
 )
+from api.v1.notifications import push_notification
 
 routers = APIRouter()
 
@@ -51,8 +55,8 @@ def _bill_to_out(bill: Bill) -> BillOut:
 
 
 @routers.post("", response_model=ApiResponse)
-def create_bill(req: CreateBillRequest, session: session_dep):
-    bill = Bill(title=req.title, description=req.description)
+def create_bill(req: CreateBillRequest, session: session_dep, user: current_user_dep):
+    bill = Bill(title=req.title, description=req.description, created_by=user.id)
     session.add(bill)
     session.flush()
 
@@ -60,18 +64,18 @@ def create_bill(req: CreateBillRequest, session: session_dep):
     client_id_to_user_id: dict[str, uuid.UUID] = {}
 
     for m in req.members:
-        user = session.exec(select(User).where(User.email == m.email)).first()
-        if not user:
-            user = User(name=m.name, email=m.email)
-            session.add(user)
+        member_user = session.exec(select(User).where(User.email == m.email)).first()
+        if not member_user:
+            member_user = User(name=m.name, email=m.email)
+            session.add(member_user)
             session.flush()
 
-        bm = BillMember(bill_id=bill.id, user_id=user.id)
+        bm = BillMember(bill_id=bill.id, user_id=member_user.id)
         session.add(bm)
         session.flush()
 
         client_id_to_bm_id[m.id] = bm.id
-        client_id_to_user_id[m.id] = user.id
+        client_id_to_user_id[m.id] = member_user.id
 
     for e in req.expenses:
         bm_id = client_id_to_bm_id.get(e.paidBy)
@@ -91,12 +95,24 @@ def create_bill(req: CreateBillRequest, session: session_dep):
     session.commit()
     session.refresh(bill)
 
+    # Real notification: a bill was created.
+    total = sum(float(e.amount) for e in req.expenses)
+    push_notification(
+        session,
+        type="bill_added",
+        title="New Bill Created",
+        description=f'"{bill.title}" created — NPR {total:.2f} total.',
+        bill_id=bill.id,
+    )
+    session.commit()
+
     return ApiResponse(success=True, data=_bill_to_out(bill).model_dump(), message="Bill created")
 
 
 @routers.get("")
 def list_bills(
     session: session_dep,
+    user: current_user_dep,
     search: Optional[str] = Query(None),
     page: int = Query(1, ge=1),
     pageSize: int = Query(10, ge=1, le=100),
@@ -104,6 +120,29 @@ def list_bills(
     query = select(Bill)
     if search:
         query = query.where(Bill.title.ilike(f"%{search}%"))
+
+    # Visibility filtering for unofficial members, based on THEIR group.
+    # Officials see everything.
+    #   hyper      -> bills created by official members
+    #   unofficial -> bills that include at least one unofficial member
+    #   private    -> only bills the viewer is a member of
+    if not is_official(user):
+        g = (user.group or "unofficial")
+        if g == "private":
+            query = query.where(
+                Bill.id.in_(select(BillMember.bill_id).where(BillMember.user_id == user.id))
+            )
+        elif g == "hyper":
+            official_ids = select(User.id).where(User.hyper_id.is_not(None))
+            query = query.where(Bill.created_by.in_(official_ids))
+        else:  # unofficial
+            unofficial_member_bills = (
+                select(BillMember.bill_id)
+                .join(User, BillMember.user_id == User.id)
+                .where(User.hyper_id.is_(None))
+            )
+            query = query.where(Bill.id.in_(unofficial_member_bills))
+
     query = query.order_by(Bill.created_at.desc())
 
     total = session.exec(select(func.count()).select_from(query.subquery())).one()
@@ -118,15 +157,29 @@ def list_bills(
 
 
 @routers.get("/{bill_id}")
-def get_bill(bill_id: uuid.UUID, session: session_dep):
+def get_bill(bill_id: uuid.UUID, session: session_dep, user: current_user_dep):
     bill = session.get(Bill, bill_id)
     if not bill:
         raise HTTPException(status_code=404, detail="Bill not found")
+    # Unofficial members may only open bills their group allows. Officials see all.
+    if not is_official(user):
+        g = (user.group or "unofficial")
+        is_member = any(bm.user_id == user.id for bm in bill.bill_members)
+        creator = session.get(User, bill.created_by) if bill.created_by else None
+        creator_official = bool(creator and creator.hyper_id)
+        has_unofficial_member = any(not bm.user.hyper_id for bm in bill.bill_members)
+        allowed = (
+            (g == "hyper" and creator_official)
+            or (g == "unofficial" and has_unofficial_member)
+            or (g == "private" and is_member)
+        )
+        if not allowed:
+            raise HTTPException(status_code=403, detail="You don't have access to this bill")
     return _bill_to_out(bill).model_dump()
 
 
 @routers.patch("/{bill_id}", response_model=ApiResponse)
-def update_bill(bill_id: uuid.UUID, req: UpdateBillRequest, session: session_dep):
+def update_bill(bill_id: uuid.UUID, req: UpdateBillRequest, session: session_dep, user: current_user_dep):
     bill = session.get(Bill, bill_id)
     if not bill:
         raise HTTPException(status_code=404, detail="Bill not found")
@@ -186,7 +239,7 @@ def update_bill(bill_id: uuid.UUID, req: UpdateBillRequest, session: session_dep
 
 
 @routers.delete("/{bill_id}", response_model=ApiResponse)
-def delete_bill(bill_id: uuid.UUID, session: session_dep):
+def delete_bill(bill_id: uuid.UUID, session: session_dep, _user: current_user_dep):
     bill = session.get(Bill, bill_id)
     if not bill:
         raise HTTPException(status_code=404, detail="Bill not found")
@@ -195,6 +248,9 @@ def delete_bill(bill_id: uuid.UUID, session: session_dep):
         session.delete(e)
     for bm in bill.bill_members:
         session.delete(bm)
+    # Remove notifications referencing this bill (no FK cascade configured).
+    for n in session.exec(select(Notification).where(Notification.bill_id == bill.id)).all():
+        session.delete(n)
     session.delete(bill)
     session.commit()
 
@@ -202,7 +258,7 @@ def delete_bill(bill_id: uuid.UUID, session: session_dep):
 
 
 @routers.post("/{bill_id}/settle", response_model=ApiResponse)
-def settle_bill(bill_id: uuid.UUID, session: session_dep):
+def settle_bill(bill_id: uuid.UUID, session: session_dep, _user: current_user_dep):
     bill = session.get(Bill, bill_id)
     if not bill:
         raise HTTPException(status_code=404, detail="Bill not found")
@@ -212,5 +268,15 @@ def settle_bill(bill_id: uuid.UUID, session: session_dep):
     session.add(bill)
     session.commit()
     session.refresh(bill)
+
+    # Real notification: a bill was settled.
+    push_notification(
+        session,
+        type="bill_settled",
+        title="Bill Settled",
+        description=f'"{bill.title}" has been fully settled. Everyone is paid up.',
+        bill_id=bill.id,
+    )
+    session.commit()
 
     return ApiResponse(success=True, data=_bill_to_out(bill).model_dump(), message="Bill settled")
