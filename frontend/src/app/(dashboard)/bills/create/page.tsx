@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
 import Link from "next/link";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -9,16 +10,11 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Select } from "@/components/ui/select";
-import { Trash2, Plus, ArrowLeft, UserPlus } from "lucide-react";
+import { Trash2, Plus, ArrowLeft, Loader2 } from "lucide-react";
 import { formatCurrency } from "@/lib/utils";
 import { billApi } from "@/lib/api";
+import { MemberPicker } from "@/components/member-picker";
 import type { Member, Expense, CreateBillInput } from "@/types";
-
-const emptyMember = (): Member => ({
-  id: crypto.randomUUID(),
-  name: "",
-  email: "",
-});
 
 const emptyExpense = (): Expense => ({
   id: crypto.randomUUID(),
@@ -30,23 +26,14 @@ const emptyExpense = (): Expense => ({
 
 export default function CreateBillPage() {
   const router = useRouter();
+  const qc = useQueryClient();
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
-  const [members, setMembers] = useState<Member[]>([emptyMember()]);
+  const [members, setMembers] = useState<Member[]>([]);
   const [expenses, setExpenses] = useState<Expense[]>([emptyExpense()]);
-  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
-  const addMember = () => setMembers([...members, emptyMember()]);
-  const removeMember = (id: string) => {
-    if (members.length === 1) return;
-    setMembers(members.filter((m) => m.id !== id));
-  };
-
-  const updateMember = (id: string, field: keyof Member, value: string) => {
-    setMembers((prev) =>
-      prev.map((m) => (m.id === id ? { ...m, [field]: value } : m))
-    );
-  };
+  const selectedIds = members.map((m) => m.id);
 
   const addExpense = () => setExpenses([...expenses, emptyExpense()]);
   const removeExpense = (id: string) => {
@@ -63,32 +50,54 @@ export default function CreateBillPage() {
   const total = expenses.reduce((sum, e) => sum + e.amount, 0);
   const share = members.length > 0 ? total / members.length : 0;
 
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setSaving(true);
-    try {
-      const input: CreateBillInput = {
-        title,
-        description: description || undefined,
-        members: members.map((m) => ({ id: m.id, name: m.name, email: m.email || "" })),
-        expenses: expenses.map((e) => ({
-          description: e.description,
-          amount: e.amount,
-          paidBy: e.paidBy,
-          date: e.date,
-        })),
-      };
-      await billApi.create(input);
+  const createMut = useMutation({
+    mutationFn: (input: CreateBillInput) => billApi.create(input),
+    onSuccess: () => {
+      // Drop the cached bills list so the bills page refetches fresh data
+      // (including the just-created bill) instead of showing stale results.
+      qc.removeQueries({ queryKey: ["bills"] });
       router.push("/bills");
-    } catch (err) {
+    },
+    onError: (err) => {
       console.error("Failed to create bill", err);
-    } finally {
-      setSaving(false);
+      setError("Failed to create bill. Please try again.");
+    },
+  });
+
+  const saving = createMut.isPending;
+
+  const handleSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (members.length === 0) {
+      setError("Select at least one member.");
+      return;
     }
+    setError(null);
+    const input: CreateBillInput = {
+      title,
+      description: description || undefined,
+      members: members.map((m) => ({ id: m.id, name: m.name, email: m.email || "" })),
+      expenses: expenses.map((e) => ({
+        description: e.description,
+        amount: e.amount,
+        paidBy: e.paidBy,
+        date: e.date,
+      })),
+    };
+    createMut.mutate(input);
   };
 
   return (
     <div className="space-y-6 max-w-4xl mx-auto">
+      {saving && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-background/60 backdrop-blur-sm">
+          <div className="flex flex-col items-center gap-3 rounded-lg border border-border bg-card p-6 shadow-lg">
+            <Loader2 className="h-8 w-8 animate-spin text-primary" />
+            <p className="text-sm font-medium text-foreground">Creating your bill…</p>
+            <p className="text-xs text-muted-foreground">Hang tight, this won&apos;t take long.</p>
+          </div>
+        </div>
+      )}
       <div className="flex items-center gap-4">
         <Link href="/bills">
           <Button variant="ghost" size="icon">
@@ -131,45 +140,20 @@ export default function CreateBillPage() {
         </Card>
 
         <Card>
-          <CardHeader className="flex flex-row items-center justify-between">
+          <CardHeader>
             <CardTitle className="text-base">Members</CardTitle>
-            <Button type="button" variant="outline" size="sm" onClick={addMember} className="gap-1">
-              <UserPlus className="h-3 w-3" />
-              Add Member
-            </Button>
           </CardHeader>
-          <CardContent className="space-y-3">
-            {members.map((member, idx) => (
-              <div key={member.id} className="flex items-center gap-3">
-                <div className="flex h-8 w-8 items-center justify-center rounded-full bg-primary/10 text-sm font-medium text-primary shrink-0">
-                  {member.name ? member.name.charAt(0).toUpperCase() : idx + 1}
-                </div>
-                <Input
-                  value={member.name}
-                  onChange={(e) => updateMember(member.id, "name", e.target.value)}
-                  placeholder="Member name"
-                  className="flex-1"
-                  required
-                />
-                <Input
-                  value={member.email || ""}
-                  onChange={(e) => updateMember(member.id, "email", e.target.value)}
-                  placeholder="Email (optional)"
-                  type="email"
-                  className="flex-1 hidden sm:block"
-                />
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="icon"
-                  className="h-8 w-8 text-muted-foreground hover:text-destructive shrink-0"
-                  onClick={() => removeMember(member.id)}
-                  disabled={members.length === 1}
-                >
-                  <Trash2 className="h-4 w-4" />
-                </Button>
-              </div>
-            ))}
+          <CardContent>
+            <MemberPicker
+              selectedIds={selectedIds}
+              selected={members}
+              onChange={setMembers}
+            />
+            {members.length === 0 && (
+              <p className="text-xs text-muted-foreground mt-3">
+                Select at least one member to split this bill.
+              </p>
+            )}
           </CardContent>
         </Card>
 
@@ -210,8 +194,9 @@ export default function CreateBillPage() {
                   <Select
                     value={expense.paidBy}
                     onChange={(e) => updateExpense(expense.id, "paidBy", e.target.value)}
-                    placeholder="Who paid?"
-                    options={members.map((m) => ({ value: m.id, label: m.name || "Unnamed" }))}
+                    placeholder={members.length === 0 ? "Select members first" : "Who paid?"}
+                    options={members.map((m) => ({ value: m.id, label: m.name }))}
+                    disabled={members.length === 0}
                   />
                 </div>
                 <Button
@@ -250,11 +235,14 @@ export default function CreateBillPage() {
           </CardContent>
         </Card>
 
+        {error && <p className="text-sm text-red-500">{error}</p>}
+
         <div className="flex justify-end gap-3">
           <Link href="/bills">
             <Button type="button" variant="outline">Cancel</Button>
           </Link>
-          <Button type="submit" disabled={saving}>
+          <Button type="submit" disabled={saving} className="gap-2">
+            {saving && <Loader2 className="h-4 w-4 animate-spin" />}
             {saving ? "Creating..." : "Create Bill"}
           </Button>
         </div>
