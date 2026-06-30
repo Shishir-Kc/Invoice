@@ -15,7 +15,13 @@ const geistMono = Geist_Mono({
 export const metadata: Metadata = {
   title: "Invoicely - Bill Tracker",
   description: "Track shared expenses and split bills with friends",
+  icons: {
+    icon: "/icon.svg",
+    shortcut: "/icon.svg",
+  },
 };
+
+import { Providers } from "@/components/providers";
 
 export default function RootLayout({
   children,
@@ -27,7 +33,9 @@ export default function RootLayout({
       lang="en"
       className={`${geistSans.variable} ${geistMono.variable} h-full antialiased dark`}
     >
-      <body className="min-h-full bg-background text-foreground">{children}</body>
+      <body className="min-h-full bg-background text-foreground">
+        <Providers>{children}</Providers>
+      </body>
     </html>
   );
 }
