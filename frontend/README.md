@@ -31,6 +31,14 @@ auth-guarded; unauthenticated users are redirected to `/login`.
 |---|---|---|
 | `NEXT_PUBLIC_API_URL` | Backend API base URL | `http://localhost:8000/api/v1/invoicely` |
 
+> The session token is delivered via an **HttpOnly cookie** set by the backend,
+> so no token env var is needed on the frontend. The axios client uses
+> `withCredentials: true` to send the cookie. For **cross-domain** deployments
+> (frontend and backend on different registrable domains), the backend must be
+> configured with `COOKIE_CROSS_DOMAIN=true` (forces `SameSite=None; Secure`,
+> requires HTTPS) and `CORS_ORIGINS` set to the frontend origin — see
+> `backend/README.md`.
+
 ## Layout
 
 ```
@@ -55,7 +63,7 @@ src/
       settings/page.tsx      # Profile (read-only) + default currency (saved via /settings)
   components/
     providers.tsx            # Theme + Auth + Query + Notification providers; DashboardShell + AuthGuard
-    auth-provider.tsx        # AuthProvider + useAuth() (token/user in localStorage)
+    auth-provider.tsx        # AuthProvider + useAuth() — HttpOnly cookie auth; caches the user (not the token) in localStorage
     auth-error-notification.tsx # Login error toast (invalid email / credentials / password)
     query-provider.tsx       # TanStack Query client
     theme-provider.tsx       # next-themes
@@ -73,7 +81,7 @@ src/
       dialog, dropdown-menu, input, label, select, separator, sheet, sidebar,
       skeleton, textarea, tooltip
   lib/
-    api.ts                   # Axios client (billApi, authApi, memberApi, notificationApi, settingsApi) + Bearer token + 401 interceptors
+    api.ts                   # Axios client (billApi, authApi, memberApi, notificationApi, settingsApi) + withCredentials cookie + 401 interceptor + authApi.logout
     utils.ts                 # cn, formatCurrency (NPR), date + balance math, greedy settlements
     validations.ts           # Zod schemas for forms
   hooks/
@@ -84,28 +92,40 @@ src/
 
 ## Auth & member access
 
-The app supports two login paths, both stored identically in `localStorage`:
+Authentication uses a **backend-issued HttpOnly session cookie** — the
+session token is never exposed to JavaScript (which mitigates XSS token
+theft). The axios client sends the cookie automatically via `withCredentials`;
+there is no `Authorization` header and no token in `localStorage`.
 
-- **HYPER login** (`/login`) — email/password → `POST /auth/login`. The returned
-  JWT is the Bearer token. `useAuth().user.hyperId` is set → the user is
+The app supports two login paths:
+
+- **HYPER login** (`/login`) — email/password → `POST /auth/login`. The
+  backend verifies credentials with HYPER server-side, then sets the session
+  cookie and returns the user. `useAuth().user.hyperId` is set → the user is
   **official** (admin) and sees member-management UI.
-- **Unofficial login** (`/login/unofficial`, linked from the main login via the
-  **"Unofficial"** button) — email + password → `POST /auth/login-unofficial`.
-  Returns a local session token; `hyperId` is empty → the user is
-  **unofficial** and sees no admin UI. Banned/expired members get a clear error.
+- **Unofficial login** (`/login/unofficial`, linked from the main login via
+  the **"Unofficial"** button) — email + password →
+  `POST /auth/login-unofficial`. Sets the session cookie; `hyperId` is empty
+  → the user is **unofficial** and sees no admin UI. Banned/expired members
+  get a clear error.
 - **Invite join** (`/join?token=…`) — public. Name + email + **password** (+
-  confirm) → `POST /members/join`, which stores the password hash and returns a
-  local session token. The password is what the member uses to log back in later
-  via `/login/unofficial`.
+  confirm) → `POST /members/join`, which stores the password hash and sets the
+  session cookie. The password is what the member uses to log back in later
+  via `/login/unofficial`. If the email already belongs to a HYPER member, the
+  backend returns `alreadyOfficial: true` and no cookie is set; the UI prompts
+  them to log in via HYPER instead.
 
-`AuthProvider` hydrates from `localStorage` on mount and then refreshes the
-user from `GET /auth/me` (which works for both token types) so `hyperId` and
-other fields are always authoritative.
+`AuthProvider` caches the (non-secret) user object in `localStorage` for an
+instant first paint, then re-validates against `GET /auth/me` (authenticated
+via the cookie) so `hyperId` and other fields are always authoritative. If
+`/me` returns `401`, the cached user is cleared.
 
-The axios client attaches `Authorization: Bearer <token>` to every request and,
-on a `401`, clears stored auth and redirects to `/login` (public pages
-`/login*` and `/join` are exempt). Banned/expired unofficial members are blocked
-server-side (401) and bounced this way.
+`logout()` calls `POST /auth/logout` (which deletes the server session and
+clears the cookie), then clears the cached user and redirects to `/login`.
+The axios response interceptor also clears the cached user and redirects to
+`/login` on a `401` from authed pages (public pages `/login*` and `/join` are
+exempt so a stray 401 there doesn't bounce visitors). Banned/expired
+unofficial members are blocked server-side (401) and bounced this way.
 
 ### Member management (official members only)
 
