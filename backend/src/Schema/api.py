@@ -1,7 +1,7 @@
 from datetime import datetime
 from decimal import Decimal
 from typing import Optional
-from pydantic import BaseModel
+from pydantic import BaseModel, EmailStr, Field
 
 
 class ApiResponse(BaseModel):
@@ -21,12 +21,12 @@ class PaginatedResponse(BaseModel):
 class MemberIn(BaseModel):
     id: str
     name: str
-    email: str = ""
+    email: EmailStr
 
 
 class ExpenseIn(BaseModel):
-    description: str
-    amount: Decimal
+    description: str = Field(max_length=200)
+    amount: Decimal = Field(ge=0, max_digits=12, decimal_places=2)
     paidBy: str
     date: str = ""
 
@@ -76,7 +76,7 @@ class BillOut(BaseModel):
 
 class MemberCreate(BaseModel):
     name: str
-    email: str = ""
+    email: EmailStr
     group: str = "unofficial"  # hyper | unofficial | private
 
 
@@ -116,16 +116,22 @@ class InviteResponse(BaseModel):
 
 class InviteCreateRequest(BaseModel):
     """Body for creating an invite link."""
-    amount: int
+    amount: int = Field(ge=1, le=100)
     unit: str  # hour | day | week | year
     group: str = "unofficial"  # hyper | unofficial | private (assigned to joiners)
+    # Optional caps. If omitted, safe defaults are applied at creation
+    # (expires in 7 days, single use). Set expiresInSeconds=null and
+    # maxUses=null together to create an unlimited, non-expiring invite
+    # (officials only; discouraged).
+    expiresInSeconds: Optional[int] = Field(default=7 * 86400, ge=1, le=365 * 86400)
+    maxUses: Optional[int] = Field(default=1, ge=1, le=1000)
 
 
 class JoinRequest(BaseModel):
     token: str
-    name: str
-    email: str
-    password: str
+    name: str = Field(min_length=1, max_length=100)
+    email: EmailStr
+    password: str = Field(min_length=8, max_length=128)
 
 
 class JoinResponse(BaseModel):
@@ -135,8 +141,8 @@ class JoinResponse(BaseModel):
 
 class UnofficialLoginRequest(BaseModel):
     """Credentials for an unofficial (invite-joined) member to log back in."""
-    email: str
-    password: str
+    email: EmailStr
+    password: str = Field(min_length=1, max_length=128)
 
 
 # --- Notifications ---------------------------------------------------------
