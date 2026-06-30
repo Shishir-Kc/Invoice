@@ -37,6 +37,7 @@ import {
 import { LogOut } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import { useNotifications } from '@/components/notification-provider';
+import { useAuth } from '@/components/auth-provider';
 
 const navItems = [
   { title: 'Dashboard', url: '/', icon: LayoutDashboard },
@@ -45,9 +46,26 @@ const navItems = [
   { title: 'Settings', url: '/settings', icon: Settings },
 ];
 
+function initials(name: string): string {
+  const parts = name.trim().split(/\s+/).filter(Boolean);
+  if (parts.length === 0) return "IN";
+  if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
+  return (parts[0][0] + parts[1][0]).toUpperCase();
+}
+
 function NavUser() {
   const router = useRouter();
   const { unreadCount } = useNotifications();
+  const { user, logout } = useAuth();
+
+  const displayName = user?.name || "Invoice User";
+  const displayEmail = user?.email || "user@invoicely.app";
+  const avatar = initials(displayName);
+
+  const handleLogout = () => {
+    logout();
+    router.replace("/login");
+  };
 
   return (
     <DropdownMenu>
@@ -58,11 +76,11 @@ function NavUser() {
           render={<span />}
         >
           <Avatar className="h-8 w-8 rounded-lg">
-            <AvatarFallback className="rounded-lg text-xs">IN</AvatarFallback>
+            <AvatarFallback className="rounded-lg text-xs">{avatar}</AvatarFallback>
           </Avatar>
           <div className="grid flex-1 text-left text-sm leading-tight">
-            <span className="truncate font-semibold">Invoice User</span>
-            <span className="truncate text-xs">user@invoicely.app</span>
+            <span className="truncate font-semibold">{displayName}</span>
+            <span className="truncate text-xs">{displayEmail}</span>
           </div>
           <ChevronRight className="ml-auto size-4" />
         </SidebarMenuButton>
@@ -76,11 +94,11 @@ function NavUser() {
           <DropdownMenuLabel className="p-0 font-normal">
             <div className="flex items-center gap-2 px-1 py-1.5 text-left text-sm">
               <Avatar className="h-8 w-8 rounded-lg">
-                <AvatarFallback className="rounded-lg text-xs">IN</AvatarFallback>
+                <AvatarFallback className="rounded-lg text-xs">{avatar}</AvatarFallback>
               </Avatar>
               <div className="grid flex-1 text-left text-sm leading-tight">
-                <span className="truncate font-semibold">Invoice User</span>
-                <span className="truncate text-xs">user@invoicely.app</span>
+                <span className="truncate font-semibold">{displayName}</span>
+                <span className="truncate text-xs">{displayEmail}</span>
               </div>
             </div>
           </DropdownMenuLabel>
@@ -96,7 +114,7 @@ function NavUser() {
           </DropdownMenuItem>
         </DropdownMenuGroup>
         <DropdownMenuSeparator />
-        <DropdownMenuItem>
+        <DropdownMenuItem onClick={handleLogout}>
           <LogOut />
           Log out
         </DropdownMenuItem>
