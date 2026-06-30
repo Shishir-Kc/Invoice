@@ -10,16 +10,11 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Select } from "@/components/ui/select";
-import { Trash2, Plus, ArrowLeft, UserPlus, Loader2 } from "lucide-react";
+import { Trash2, Plus, ArrowLeft, Loader2 } from "lucide-react";
 import { formatCurrency } from "@/lib/utils";
 import { billApi } from "@/lib/api";
+import { MemberPicker } from "@/components/member-picker";
 import type { Member, Expense, UpdateBillInput } from "@/types";
-
-const emptyMember = (): Member => ({
-  id: crypto.randomUUID(),
-  name: "",
-  email: "",
-});
 
 const emptyExpense = (): Expense => ({
   id: crypto.randomUUID(),
@@ -44,12 +39,14 @@ export default function EditBillPage() {
 
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
-  const [members, setMembers] = useState<Member[]>([emptyMember()]);
+  const [members, setMembers] = useState<Member[]>([]);
   const [expenses, setExpenses] = useState<Expense[]>([emptyExpense()]);
   const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     if (existing) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setTitle(existing.title);
       setDescription(existing.description ?? "");
       setMembers(existing.members.map((m: Member) => ({ ...m })));
@@ -65,17 +62,7 @@ export default function EditBillPage() {
     },
   });
 
-  const addMember = () => setMembers([...members, emptyMember()]);
-  const removeMember = (id: string) => {
-    if (members.length === 1) return;
-    setMembers(members.filter((m) => m.id !== id));
-  };
-
-  const updateMember = (id: string, field: keyof Member, value: string) => {
-    setMembers((prev) =>
-      prev.map((m) => (m.id === id ? { ...m, [field]: value } : m))
-    );
-  };
+  const selectedIds = members.map((m) => m.id);
 
   const addExpense = () => setExpenses([...expenses, emptyExpense()]);
   const removeExpense = (id: string) => {
@@ -94,6 +81,11 @@ export default function EditBillPage() {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (members.length === 0) {
+      setError("Select at least one member.");
+      return;
+    }
+    setError(null);
     setSaving(true);
     try {
       const input: UpdateBillInput = {
@@ -111,7 +103,7 @@ export default function EditBillPage() {
       await updateMutation.mutateAsync(input);
     } catch (err) {
       console.error("Failed to update bill", err);
-    } finally {
+      setError("Failed to update bill. Please try again.");
       setSaving(false);
     }
   };
@@ -179,45 +171,20 @@ export default function EditBillPage() {
         </Card>
 
         <Card>
-          <CardHeader className="flex flex-row items-center justify-between">
+          <CardHeader>
             <CardTitle className="text-base">Members</CardTitle>
-            <Button type="button" variant="outline" size="sm" onClick={addMember} className="gap-1">
-              <UserPlus className="h-3 w-3" />
-              Add Member
-            </Button>
           </CardHeader>
-          <CardContent className="space-y-3">
-            {members.map((member, idx) => (
-              <div key={member.id} className="flex items-center gap-3">
-                <div className="flex h-8 w-8 items-center justify-center rounded-full bg-primary/10 text-sm font-medium text-primary shrink-0">
-                  {member.name ? member.name.charAt(0).toUpperCase() : idx + 1}
-                </div>
-                <Input
-                  value={member.name}
-                  onChange={(e) => updateMember(member.id, "name", e.target.value)}
-                  placeholder="Member name"
-                  className="flex-1"
-                  required
-                />
-                <Input
-                  value={member.email || ""}
-                  onChange={(e) => updateMember(member.id, "email", e.target.value)}
-                  placeholder="Email (optional)"
-                  type="email"
-                  className="flex-1 hidden sm:block"
-                />
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="icon"
-                  className="h-8 w-8 text-muted-foreground hover:text-destructive shrink-0"
-                  onClick={() => removeMember(member.id)}
-                  disabled={members.length === 1}
-                >
-                  <Trash2 className="h-4 w-4" />
-                </Button>
-              </div>
-            ))}
+          <CardContent>
+            <MemberPicker
+              selectedIds={selectedIds}
+              selected={members}
+              onChange={setMembers}
+            />
+            {members.length === 0 && (
+              <p className="text-xs text-muted-foreground mt-3">
+                Select at least one member to split this bill.
+              </p>
+            )}
           </CardContent>
         </Card>
 
@@ -258,8 +225,9 @@ export default function EditBillPage() {
                   <Select
                     value={expense.paidBy}
                     onChange={(e) => updateExpense(expense.id, "paidBy", e.target.value)}
-                    placeholder="Who paid?"
-                    options={members.map((m) => ({ value: m.id, label: m.name || "Unnamed" }))}
+                    placeholder={members.length === 0 ? "Select members first" : "Who paid?"}
+                    options={members.map((m) => ({ value: m.id, label: m.name }))}
+                    disabled={members.length === 0}
                   />
                 </div>
                 <Button
@@ -294,11 +262,14 @@ export default function EditBillPage() {
           </CardContent>
         </Card>
 
+        {error && <p className="text-sm text-red-500">{error}</p>}
+
         <div className="flex justify-end gap-3">
           <Link href="/bills">
             <Button type="button" variant="outline">Cancel</Button>
           </Link>
-          <Button type="submit" disabled={saving}>
+          <Button type="submit" disabled={saving} className="gap-2">
+            {saving && <Loader2 className="h-4 w-4 animate-spin" />}
             {saving ? "Saving..." : "Update Bill"}
           </Button>
         </div>
