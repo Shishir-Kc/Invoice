@@ -11,6 +11,12 @@ class Invite(SQLModel, table=True):
     Anyone with the token can join as an unofficial member via
     `POST /members/join`. Joiners receive access for `access_duration_seconds`
     starting from the moment they join.
+
+    Security:
+      - ``expires_at``: the link becomes invalid after this time. Null is
+        allowed only for explicitly non-expiring invites (discouraged).
+      - ``max_uses``: maximum number of times the link may be used. Null means
+        unlimited (discouraged). Defaults are enforced at creation time.
     """
 
     id: uuid.UUID = Field(primary_key=True, default_factory=uuid.uuid4)
@@ -23,3 +29,8 @@ class Invite(SQLModel, table=True):
     group: str = Field(default="unofficial")
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     use_count: int = Field(default=0)
+    # When the invite link itself expires (distinct from the access duration
+    # granted to joiners). Null = never expires.
+    expires_at: Optional[datetime] = Field(default=None)
+    # Maximum number of joins allowed via this link. Null = unlimited.
+    max_uses: Optional[int] = Field(default=None)
