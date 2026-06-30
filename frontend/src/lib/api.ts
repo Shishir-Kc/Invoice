@@ -15,7 +15,6 @@ import type {
   BillGroup,
   InviteResult,
 } from "@/types";
-import { TOKEN_KEY } from "@/components/auth-provider";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000/api/v1/invoicely";
 
@@ -24,18 +23,9 @@ const api = axios.create({
   headers: {
     "Content-Type": "application/json",
   },
+  // Send the HttpOnly session cookie (set by the backend on login/join) with
+  // every cross-origin request. The token is never read by JS.
   withCredentials: true,
-});
-
-// Attach the saved HYPER access token to every request.
-api.interceptors.request.use((config) => {
-  if (typeof window !== "undefined") {
-    const token = localStorage.getItem(TOKEN_KEY);
-    if (token) {
-      config.headers.Authorization = `Bearer ${token}`;
-    }
-  }
-  return config;
 });
 
 // Auto-logout + redirect to /login on a 401 from the backend — but only on
@@ -51,7 +41,6 @@ api.interceptors.response.use(
       typeof window !== "undefined" &&
       !isPublicPage
     ) {
-      localStorage.removeItem(TOKEN_KEY);
       localStorage.removeItem("invoicely_user");
       window.location.href = "/login";
     }
@@ -81,13 +70,13 @@ export const billApi = {
 
 export const authApi = {
   login: (email: string, password: string) =>
-    api.post<ApiResponse<{ token: string; user: { id: string; email: string; name: string; accountType?: string; hyperId?: string } }>>("/auth/login", { email, password }),
+    api.post<ApiResponse<{ user: { id: string; email: string; name: string; accountType?: string; hyperId?: string } }>>("/auth/login", { email, password }),
 
   loginUnofficial: (email: string, password: string) =>
-    api.post<ApiResponse<{ token: string; user: { id: string; email: string; name: string; accountType?: string; hyperId?: string } }>>("/auth/login-unofficial", { email, password }),
+    api.post<ApiResponse<{ user: { id: string; email: string; name: string; accountType?: string; hyperId?: string } }>>("/auth/login-unofficial", { email, password }),
 
-  register: (name: string, email: string, password: string) =>
-    api.post<ApiResponse<{ token: string; user: { id: string; email: string; name: string } }>>("/auth/register", { name, email, password }),
+  logout: () =>
+    api.post<ApiResponse<void>>("/auth/logout"),
 
   me: () =>
     api.get<ApiResponse<{ id: string; email: string; name: string; accountType?: string; hyperId?: string }>>("/auth/me"),
@@ -117,7 +106,7 @@ export const memberApi = {
     api.post<ApiResponse<InviteResult>>("/members/invite", data),
 
   join: (data: { token: string; name: string; email: string; password: string }) =>
-    api.post<ApiResponse<{ token: string; user: JoinUser }>>("/members/join", data),
+    api.post<ApiResponse<{ alreadyOfficial: boolean; user: JoinUser }>>("/members/join", data),
 
   ban: (id: string) =>
     api.post<ApiResponse<MemberWithStats>>(`/members/${id}/ban`),
