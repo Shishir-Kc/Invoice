@@ -54,8 +54,8 @@ export default function LoginPage() {
     setLoading(true);
     try {
       const { data: resp } = await authApi.login(data.email, data.password);
-      const { token, user } = resp.data;
-      login(token, {
+      const { user } = resp.data;
+      login({
         id: user.id,
         email: user.email,
         name: user.name,
