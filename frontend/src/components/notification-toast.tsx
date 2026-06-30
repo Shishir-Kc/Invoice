@@ -21,6 +21,7 @@ export function NotificationToast() {
 
   useEffect(() => {
     if (latestNotification) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setItem(latestNotification);
       setVisible(true);
       const timer = setTimeout(() => {
@@ -41,13 +42,23 @@ export function NotificationToast() {
         visible ? "translate-y-0 opacity-100" : "translate-y-4 opacity-0"
       }`}
     >
-      <button
+      <div
+        role="button"
+        tabIndex={0}
         onClick={() => {
           setVisible(false);
           setTimeout(() => clearLatest(), 300);
           router.push("/notifications");
         }}
-        className="flex w-full items-start gap-3 rounded-lg border border-border bg-card p-4 shadow-lg text-left hover:bg-accent/50 transition-colors"
+        onKeyDown={(e) => {
+          if (e.key === "Enter" || e.key === " ") {
+            e.preventDefault();
+            setVisible(false);
+            setTimeout(() => clearLatest(), 300);
+            router.push("/notifications");
+          }
+        }}
+        className="flex w-full items-start gap-3 rounded-lg border border-border bg-card p-4 shadow-lg text-left hover:bg-accent/50 transition-colors cursor-pointer"
       >
         <div className={`shrink-0 mt-0.5 ${config[item.type].color}`}>
           <Icon className="h-5 w-5" />
@@ -63,10 +74,11 @@ export function NotificationToast() {
             setTimeout(() => clearLatest(), 300);
           }}
           className="shrink-0 rounded-md p-1 text-muted-foreground hover:text-foreground hover:bg-accent transition-colors"
+          aria-label="Dismiss notification"
         >
           <X className="h-4 w-4" />
         </button>
-      </button>
+      </div>
     </div>
   );
 }
