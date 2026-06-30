@@ -23,4 +23,5 @@ npx wrangler pages deploy .vercel/output/static
 ```
 
 ## ENV
-- `NEXT_PUBLIC_API_URL` — Backend API endpoint (default: `http://localhost:8000/api`)
+- `NEXT_PUBLIC_API_URL` — Backend API endpoint (default: `http://localhost:8000/api/v1/invoicely`)
+- The axios client (`src/lib/api.ts`) attaches the saved HYPER `accessToken` as `Authorization: Bearer <token>` and redirects to `/login` on a `401`.
