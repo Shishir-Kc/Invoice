@@ -1,13 +1,20 @@
 """HYPER (Arcademia) auth integration.
 
-Proxies login to the external HYPER API at https://api.arcademia.app/api/auth/login
-and provides helpers to inspect the returned JWT access token.
+Proxies login to the external HYPER API. The backend NEVER trusts a JWT
+presented by the client. Instead, on a successful HYPER login the backend
+mints its own opaque session token (see ``api/v1/auth.py`` and the ``session``
+table) and returns that to the frontend. Subsequent requests authenticate via
+that opaque token looked up in the DB — there is no JWT verification path and
+therefore no way to forge a token client-side.
+
+This module only contains:
+  - ``login_with_hyper``: forwards credentials to HYPER and returns a
+    normalized user payload (the HYPER access token is used only here, in the
+    trusted server-to-HYPER call, and is discarded).
+  - ``get_token_from_header``: extracts the backend-issued Bearer token.
 """
 
-import base64
-import json
 import os
-from datetime import datetime, timezone
 from typing import Optional
 
 import httpx
@@ -37,12 +44,15 @@ class HyperUser:
 async def login_with_hyper(email: str, password: str) -> dict:
     """Call the HYPER login endpoint and return a normalized auth payload.
 
-    Returns: { "token": <accessToken>, "user": { id, email, name, accountType } }
+    Returns: { "user": { id, email, name, accountType } }
 
     Raises HTTPException with a structured `detail` on failure:
         { "code": <invalid_email|password_required|invalid_credentials|hyper_error>,
           "message": <friendly message>,
           "fields": { <field>: <message>, ... } }
+
+    Note: the HYPER access token is intentionally NOT returned to callers;
+    the backend issues its own session token after a successful HYPER login.
     """
     try:
         async with httpx.AsyncClient(timeout=15.0) as client:
@@ -51,7 +61,8 @@ async def login_with_hyper(email: str, password: str) -> dict:
                 json={"email": email, "password": password},
                 headers={"Content-Type": "application/json"},
             )
-    except httpx.RequestError as exc:
+    except httpx.RequestError:
+        # Don't leak the underlying transport error to clients.
         raise HTTPException(
             status_code=502,
             detail={
@@ -72,6 +83,7 @@ async def login_with_hyper(email: str, password: str) -> dict:
     token = body.get("accessToken")
 
     if not token:
+        # Generic message — do not echo HYPER's raw body.
         raise HTTPException(
             status_code=502,
             detail={
@@ -87,6 +99,9 @@ async def login_with_hyper(email: str, password: str) -> dict:
         name=(user_in.get("username") or user_in.get("email") or "").strip(),
         account_type=user_in.get("accountType") or user_in.get("account_type") or "",
     )
+    # Return the HYPER token too — the caller (login endpoint) uses it only to
+    # confirm HYPER accepted the credentials; it then discards it and issues a
+    # local session token. It must never be sent to the frontend.
     return {"token": token, "user": user.to_dict()}
 
 
@@ -105,7 +120,7 @@ def _parse_hyper_error(resp: httpx.Response) -> dict:
     try:
         body = resp.json()
     except Exception:
-        return {"code": code, "message": resp.text or message, "fields": fields}
+        return {"code": code, "message": message, "fields": fields}
 
     errors = body.get("errors") or {}
     if isinstance(errors, dict):
@@ -134,44 +149,17 @@ def _parse_hyper_error(resp: httpx.Response) -> dict:
     return {"code": code, "message": message, "fields": fields}
 
 
-def _b64url_decode(segment: str) -> bytes:
-    padding = "=" * (-len(segment) % 4)
-    return base64.urlsafe_b64decode(segment + padding)
-
-
-def decode_hyper_token(token: str) -> dict:
-    """Decode a HYPER JWT payload (no signature verification — we trust HYPER)."""
-    try:
-        parts = token.split(".")
-        if len(parts) < 2:
-            raise ValueError("not a JWT")
-        payload = json.loads(_b64url_decode(parts[1]))
-        return payload
-    except Exception as exc:
-        raise HTTPException(status_code=401, detail=f"Invalid access token: {exc}")
-
-
-def user_from_token(token: str) -> dict:
-    """Decode the token and return a normalized user dict, checking expiry."""
-    payload = decode_hyper_token(token)
-
-    exp = payload.get("exp")
-    if exp and datetime.fromtimestamp(exp, tz=timezone.utc) < datetime.now(tz=timezone.utc):
-        raise HTTPException(status_code=401, detail="Access token expired")
-
-    return {
-        "id": payload.get("sub", ""),
-        "email": payload.get("email", ""),
-        "name": payload.get("email", ""),
-        "accountType": payload.get("accountType") or payload.get("account_type") or "",
-    }
-
-
 def get_token_from_header(authorization: Optional[str] = Header(default=None)) -> str:
-    """Extract a Bearer token from the Authorization header."""
+    """Extract a Bearer token from the Authorization header.
+
+    The token is a backend-issued opaque session token (never a client JWT).
+    """
     if not authorization:
         raise HTTPException(status_code=401, detail="Missing Authorization header")
     scheme, _, value = authorization.partition(" ")
     if scheme.lower() != "bearer" or not value:
-        raise HTTPException(status_code=401, detail="Invalid Authorization header. Expected 'Bearer <token>'")
+        raise HTTPException(
+            status_code=401,
+            detail="Invalid Authorization header. Expected 'Bearer <token>'",
+        )
     return value
