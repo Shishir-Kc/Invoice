@@ -3,6 +3,10 @@ from sqlmodel import SQLModel
 from sqlalchemy import engine_from_config
 from sqlalchemy import pool
 from src.Schema import bill
+from src.Schema import notification
+from src.Schema import settings
+from src.Schema import invite
+from src.Schema import session
 from alembic import context
 from dotenv import load_dotenv
 import  os 
