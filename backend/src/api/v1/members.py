@@ -1,21 +1,24 @@
 import os
 import secrets
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from sqlalchemy import func, delete
 from sqlmodel import Session, select
 
 from dependency.db import session_dep
-from dependency.current_user import official_user_dep
+from dependency.current_user import current_user_dep, official_user_dep
 from dependency.access import (
     duration_to_seconds,
     extend_expiry,
     access_status,
     is_official,
     VALID_UNITS,
+    _as_aware_utc,
 )
+from dependency.ratelimit import rate_limit_join
+from dependency.cookies import set_session_cookie
 from Schema.bill import User, BillMember, Expense
 from Schema.invite import Invite
 from Schema.session import Session as SessionRow
@@ -74,11 +77,18 @@ def _member_out(user: User, session: Session) -> dict:
 @routers.get("")
 def list_members(
     session: session_dep,
+    _user: current_user_dep,
     search: Optional[str] = Query(None),
     page: int = Query(1, ge=1),
     pageSize: int = Query(20, ge=1, le=100),
 ):
-    """List all known members (users) with per-member stats + access info."""
+    """List all known members (users) with per-member stats + access info.
+
+    Requires authentication. Previously this endpoint was unauthenticated,
+    which leaked every member's email / ban status / access expiry to the
+    public internet. Admin-only mutations (ban/extend/invite/permanent) are
+    still gated to official members via ``official_user_dep``.
+    """
     query = select(User)
     if search:
         like = f"%{search}%"
@@ -97,7 +107,7 @@ def list_members(
 
 
 @routers.get("/{member_id}")
-def get_member(member_id: str, session: session_dep):
+def get_member(member_id: str, session: session_dep, _user: current_user_dep):
     user = session.get(User, member_id)
     if not user:
         raise HTTPException(status_code=404, detail="Member not found")
@@ -147,10 +157,14 @@ def create_member(
 def create_invite(req: InviteCreateRequest, session: session_dep, admin: official_user_dep):
     """Generate an invite link (official members only).
 
-    Body: { amount, unit, group } where unit is hour | day | week | year and
-    group is hyper | unofficial | private. Anyone who joins via the link gets
-    access for that duration from the moment they join, and is assigned to the
-    given visibility group.
+    Body: { amount, unit, group, expiresInSeconds?, maxUses? } where unit is
+    hour | day | week | year and group is hyper | unofficial | private.
+    Anyone who joins via the link gets access for that duration from the
+    moment they join, and is assigned to the given visibility group.
+
+    By default links expire after 7 days and are single-use. Both caps can be
+    overridden; setting both to null creates an unlimited, non-expiring invite
+    (discouraged).
     """
     try:
         seconds = duration_to_seconds(req.amount, req.unit)
@@ -159,11 +173,17 @@ def create_invite(req: InviteCreateRequest, session: session_dep, admin: officia
     if req.group not in ("hyper", "unofficial", "private"):
         raise HTTPException(status_code=400, detail="Invalid group")
 
+    expires_at = None
+    if req.expiresInSeconds is not None:
+        expires_at = datetime.now(timezone.utc) + timedelta(seconds=req.expiresInSeconds)
+
     invite = Invite(
         token=secrets.token_urlsafe(24),
         created_by=admin.id,
         access_duration_seconds=seconds,
         group=req.group,
+        expires_at=expires_at,
+        max_uses=req.maxUses,
     )
     session.add(invite)
     session.commit()
@@ -183,23 +203,32 @@ def create_invite(req: InviteCreateRequest, session: session_dep, admin: officia
 
 
 @routers.post("/join", response_model=ApiResponse)
-def join_via_invite(req: JoinRequest, session: session_dep):
+def join_via_invite(
+    req: JoinRequest,
+    response: Response,
+    session: session_dep,
+    _rl: None = Depends(rate_limit_join),
+):
     """Public endpoint: join as an unofficial member using an invite token.
 
     Finds-or-creates a user by email, sets their access to expire at
-    now + invite.access_duration_seconds, and issues a local session token.
+    now + invite.access_duration_seconds, and issues a local session token
+    stored in an HttpOnly cookie. Enforces the invite's expiry and max-uses
+    caps.
     """
     invite = session.exec(select(Invite).where(Invite.token == req.token)).first()
     if not invite:
         raise HTTPException(status_code=404, detail="Invalid or unknown invite link")
 
-    if not req.email.strip():
-        raise HTTPException(status_code=400, detail="Email is required")
-    if not req.name.strip():
-        raise HTTPException(status_code=400, detail="Name is required")
-    if len(req.password) < 8:
-        raise HTTPException(status_code=400, detail="Password must be at least 8 characters")
+    # Enforce invite expiry.
+    if invite.expires_at is not None and _as_aware_utc(invite.expires_at) <= datetime.now(timezone.utc):
+        raise HTTPException(status_code=410, detail="This invite link has expired")
+    # Enforce max uses.
+    if invite.max_uses is not None and (invite.use_count or 0) >= invite.max_uses:
+        raise HTTPException(status_code=410, detail="This invite link is no longer valid")
 
+    # req fields are validated by the schema (email format, name length,
+    # password >= 8). Strip name/email defensively.
     email = req.email.strip()
     name = req.name.strip()
 
@@ -210,10 +239,11 @@ def join_via_invite(req: JoinRequest, session: session_dep):
         session.flush()
     elif is_official(user):
         # Already a HYPER member — they don't need invite access; just return
-        # their info without a session (they authenticate with HYPER).
+        # their info without a session (they authenticate with HYPER). No
+        # cookie is set; the frontend should redirect them to HYPER login.
         return ApiResponse(
             success=True,
-            data={"token": "", "user": _user_to_dict(user)},
+            data={"alreadyOfficial": True, "user": _user_to_dict(user)},
             message="You already have an official HYPER account. Please log in via HYPER.",
         )
     elif user.is_kicked:
@@ -225,8 +255,6 @@ def join_via_invite(req: JoinRequest, session: session_dep):
         )
 
     # Grant/refresh access for the invite duration.
-    from datetime import timedelta
-
     user.access_expires_at = datetime.now(timezone.utc) + timedelta(
         seconds=invite.access_duration_seconds
     )
@@ -252,9 +280,10 @@ def join_via_invite(req: JoinRequest, session: session_dep):
     session.commit()
     session.refresh(user)
 
+    set_session_cookie(response, token)
     return ApiResponse(
         success=True,
-        data={"token": token, "user": _user_to_dict(user)},
+        data={"alreadyOfficial": False, "user": _user_to_dict(user)},
         message="Welcome! You now have access to Invoicely.",
     )
 
