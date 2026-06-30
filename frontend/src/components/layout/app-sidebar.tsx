@@ -62,8 +62,8 @@ function NavUser() {
   const displayEmail = user?.email || "user@invoicely.app";
   const avatar = initials(displayName);
 
-  const handleLogout = () => {
-    logout();
+  const handleLogout = async () => {
+    await logout();
     router.replace("/login");
   };
 
