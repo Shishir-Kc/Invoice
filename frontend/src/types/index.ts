@@ -4,6 +4,31 @@ export interface Member {
   email?: string;
 }
 
+export interface MemberWithStats extends Member {
+  billCount: number;
+  totalPaid: number;
+  // Access management
+  isOfficial: boolean;
+  isKicked: boolean;
+  accessExpiresAt?: string | null; // ISO datetime; null = permanent
+  accessStatus: "official" | "active" | "expired" | "banned" | "permanent";
+  /** Visibility group this unofficial member belongs to. */
+  group: BillGroup;
+}
+
+export type DurationUnit = "hour" | "day" | "week" | "year";
+
+export interface Duration {
+  amount: number;
+  unit: DurationUnit;
+}
+
+export interface InviteResult {
+  token: string;
+  link: string;
+  accessDurationSeconds: number;
+  createdAt: string;
+}
 export interface Expense {
   id: string;
   description: string;
@@ -13,6 +38,14 @@ export interface Expense {
 }
 
 export type BillStatus = "open" | "settled";
+
+/** Visibility group assigned to an unofficial member, controlling which bills
+ *  they can see:
+ *  - "hyper":      all bills created by official members
+ *  - "unofficial": bills that include at least one unofficial member
+ *  - "private":    only bills they are a member of
+ * Official members always see every bill. */
+export type BillGroup = "hyper" | "unofficial" | "private";
 
 export interface Bill {
   id: string;
@@ -67,4 +100,20 @@ export interface Notification {
   time: string;
   read: boolean;
   billId?: string;
+}
+
+// Raw shape returned by the backend (uses `createdAt`); mapped to Notification
+// (which uses `time`) in the API client.
+export interface NotificationDto {
+  id: string;
+  type: NotificationType;
+  title: string;
+  description: string;
+  billId?: string | null;
+  read: boolean;
+  createdAt: string;
+}
+
+export interface UserSetting {
+  defaultCurrency: string;
 }
