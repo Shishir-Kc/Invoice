@@ -25,6 +25,21 @@ from api.v1.notifications import push_notification
 routers = APIRouter()
 
 
+def _can_mutate_bill(bill: Bill, user: User) -> bool:
+    """Only the bill's creator (or any official) may edit/delete/settle it."""
+    if is_official(user):
+        return True
+    return bill.created_by is not None and bill.created_by == user.id
+
+
+def _bill_recipient_ids(bill: Bill) -> list:
+    """Distinct user ids that should be notified about a bill event."""
+    ids = {bm.user_id for bm in bill.bill_members}
+    if bill.created_by is not None:
+        ids.add(bill.created_by)
+    return list(ids)
+
+
 def _bill_to_out(bill: Bill) -> BillOut:
     members_out = []
     for bm in bill.bill_members:
@@ -66,6 +81,15 @@ def create_bill(req: CreateBillRequest, session: session_dep, user: current_user
     for m in req.members:
         member_user = session.exec(select(User).where(User.email == m.email)).first()
         if not member_user:
+            # Only official members may mint new User rows (prevents any
+            # authenticated user from pre-claiming arbitrary emails / polluting
+            # the member directory / shadow-creating accounts). Unofficial
+            # members must reference users that already exist.
+            if not is_official(user):
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"No member with email {m.email}. Ask an administrator to add them first.",
+                )
             member_user = User(name=m.name, email=m.email)
             session.add(member_user)
             session.flush()
@@ -95,10 +119,11 @@ def create_bill(req: CreateBillRequest, session: session_dep, user: current_user
     session.commit()
     session.refresh(bill)
 
-    # Real notification: a bill was created.
+    # Real per-recipient notification: a bill was created.
     total = sum(float(e.amount) for e in req.expenses)
     push_notification(
         session,
+        user_ids=_bill_recipient_ids(bill),
         type="bill_added",
         title="New Bill Created",
         description=f'"{bill.title}" created — NPR {total:.2f} total.',
@@ -183,6 +208,8 @@ def update_bill(bill_id: uuid.UUID, req: UpdateBillRequest, session: session_dep
     bill = session.get(Bill, bill_id)
     if not bill:
         raise HTTPException(status_code=404, detail="Bill not found")
+    if not _can_mutate_bill(bill, user):
+        raise HTTPException(status_code=403, detail="You don't have permission to edit this bill")
 
     if req.title is not None:
         bill.title = req.title
@@ -205,6 +232,11 @@ def update_bill(bill_id: uuid.UUID, req: UpdateBillRequest, session: session_dep
         for m in req.members:
             user = session.exec(select(User).where(User.email == m.email)).first()
             if not user:
+                if not is_official(user):
+                    raise HTTPException(
+                        status_code=400,
+                        detail=f"No member with email {m.email}. Ask an administrator to add them first.",
+                    )
                 user = User(name=m.name, email=m.email)
                 session.add(user)
                 session.flush()
@@ -239,10 +271,12 @@ def update_bill(bill_id: uuid.UUID, req: UpdateBillRequest, session: session_dep
 
 
 @routers.delete("/{bill_id}", response_model=ApiResponse)
-def delete_bill(bill_id: uuid.UUID, session: session_dep, _user: current_user_dep):
+def delete_bill(bill_id: uuid.UUID, session: session_dep, user: current_user_dep):
     bill = session.get(Bill, bill_id)
     if not bill:
         raise HTTPException(status_code=404, detail="Bill not found")
+    if not _can_mutate_bill(bill, user):
+        raise HTTPException(status_code=403, detail="You don't have permission to delete this bill")
 
     for e in bill.expenses:
         session.delete(e)
@@ -258,10 +292,12 @@ def delete_bill(bill_id: uuid.UUID, session: session_dep, _user: current_user_de
 
 
 @routers.post("/{bill_id}/settle", response_model=ApiResponse)
-def settle_bill(bill_id: uuid.UUID, session: session_dep, _user: current_user_dep):
+def settle_bill(bill_id: uuid.UUID, session: session_dep, user: current_user_dep):
     bill = session.get(Bill, bill_id)
     if not bill:
         raise HTTPException(status_code=404, detail="Bill not found")
+    if not _can_mutate_bill(bill, user):
+        raise HTTPException(status_code=403, detail="You don't have permission to settle this bill")
 
     bill.status = "settled"
     bill.updated_at = datetime.now(timezone.utc)
@@ -269,9 +305,10 @@ def settle_bill(bill_id: uuid.UUID, session: session_dep, _user: current_user_de
     session.commit()
     session.refresh(bill)
 
-    # Real notification: a bill was settled.
+    # Real per-recipient notification: a bill was settled.
     push_notification(
         session,
+        user_ids=_bill_recipient_ids(bill),
         type="bill_settled",
         title="Bill Settled",
         description=f'"{bill.title}" has been fully settled. Everyone is paid up.',
