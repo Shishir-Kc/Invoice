@@ -1,29 +1,50 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Save, User } from "lucide-react";
+import { Save, User, Check, Loader2 } from "lucide-react";
+import { useAuth } from "@/components/auth-provider";
+import { settingsApi } from "@/lib/api";
+
+const DEFAULT_CURRENCY = "NPR";
 
 export default function SettingsPage() {
-  const [saving, setSaving] = useState(false);
-  const [form, setForm] = useState({
-    name: "You",
-    email: "you@example.com",
-    defaultCurrency: "USD",
+  const { user } = useAuth();
+  const qc = useQueryClient();
+
+  const { data: res, isLoading } = useQuery({
+    queryKey: ["settings"],
+    queryFn: () => settingsApi.get(),
   });
 
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setSaving(true);
-    await new Promise((r) => setTimeout(r, 1000));
-    setSaving(false);
-  };
+  const savedCurrency = res?.data?.data?.defaultCurrency ?? DEFAULT_CURRENCY;
 
-  const update = (field: string, value: string) => {
-    setForm((prev) => ({ ...prev, [field]: value }));
+  const [currency, setCurrency] = useState<string>(DEFAULT_CURRENCY);
+  const [saved, setSaved] = useState(false);
+
+  // Sync the local input once the server value loads.
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setCurrency(savedCurrency);
+  }, [savedCurrency]);
+
+  const saveMut = useMutation({
+    mutationFn: () => settingsApi.update({ defaultCurrency: currency.toUpperCase() }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["settings"] });
+      setSaved(true);
+      setTimeout(() => setSaved(false), 2000);
+    },
+  });
+
+  const handleSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!currency.trim()) return;
+    saveMut.mutate();
   };
 
   return (
@@ -41,7 +62,9 @@ export default function SettingsPage() {
                 <User className="h-5 w-5 text-primary" />
                 <div>
                   <CardTitle className="text-base">Profile</CardTitle>
-                  <CardDescription>Your personal information</CardDescription>
+                  <CardDescription>
+                    Managed by your HYPER account — read-only here
+                  </CardDescription>
                 </div>
               </div>
             </CardHeader>
@@ -51,9 +74,10 @@ export default function SettingsPage() {
                   <Label htmlFor="name">Name</Label>
                   <Input
                     id="name"
-                    value={form.name}
-                    onChange={(e) => update("name", e.target.value)}
-                    placeholder="Your name"
+                    value={user?.name ?? ""}
+                    readOnly
+                    placeholder="Not available"
+                    className="opacity-70"
                   />
                 </div>
                 <div className="space-y-2">
@@ -61,9 +85,10 @@ export default function SettingsPage() {
                   <Input
                     id="email"
                     type="email"
-                    value={form.email}
-                    onChange={(e) => update("email", e.target.value)}
-                    placeholder="you@example.com"
+                    value={user?.email ?? ""}
+                    readOnly
+                    placeholder="Not available"
+                    className="opacity-70"
                   />
                 </div>
               </div>
@@ -80,19 +105,34 @@ export default function SettingsPage() {
                 <Label htmlFor="currency">Default Currency</Label>
                 <Input
                   id="currency"
-                  value={form.defaultCurrency}
-                  onChange={(e) => update("defaultCurrency", e.target.value)}
-                  placeholder="USD"
+                  value={currency}
+                  onChange={(e) => setCurrency(e.target.value.toUpperCase())}
+                  placeholder={DEFAULT_CURRENCY}
                   maxLength={3}
+                  disabled={isLoading}
                 />
               </div>
             </CardContent>
           </Card>
 
-          <div className="flex justify-end">
-            <Button type="submit" disabled={saving} className="gap-2">
-              <Save className="h-4 w-4" />
-              {saving ? "Saving..." : "Save Settings"}
+          <div className="flex items-center justify-end gap-3">
+            {saved && (
+              <span className="flex items-center gap-1 text-sm text-emerald-500">
+                <Check className="h-4 w-4" />
+                Saved
+              </span>
+            )}
+            <Button
+              type="submit"
+              disabled={saveMut.isPending || isLoading}
+              className="gap-2"
+            >
+              {saveMut.isPending ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : (
+                <Save className="h-4 w-4" />
+              )}
+              Save Settings
             </Button>
           </div>
         </form>
