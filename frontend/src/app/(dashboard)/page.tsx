@@ -7,7 +7,7 @@ import { Receipt, DollarSign, Users, CheckCircle2, TrendingUp, ArrowUpRight, Loa
 import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from "recharts";
 import { billApi } from "@/lib/api";
 import { calculateTotalExpenses } from "@/lib/utils";
-import { format } from "date-fns";
+import { format, subMonths, isSameMonth } from "date-fns";
 import type { Bill } from "@/types";
 
 export default function DashboardPage() {
@@ -46,14 +46,22 @@ export default function DashboardPage() {
     { label: "Settled Bills", value: String(settledBills), icon: CheckCircle2, change: `${totalBills > 0 ? Math.round((settledBills / totalBills) * 100) : 0}% settled`, color: "text-emerald-500" },
   ];
 
-  const spendingData = [
-    { month: "Jan", amount: 0 },
-    { month: "Feb", amount: 0 },
-    { month: "Mar", amount: 0 },
-    { month: "Apr", amount: 0 },
-    { month: "May", amount: 0 },
-    { month: "Jun", amount: totalSpent },
-  ];
+  // Real per-month spending over the last 6 months, aggregated from bill
+  // expense dates (no hardcoded placeholder months/zeros).
+  const now = new Date();
+  const spendingData = Array.from({ length: 6 }, (_, i) => {
+    const monthDate = subMonths(now, 5 - i);
+    const amount = bills.reduce((sum: number, b: Bill) => {
+      const monthTotal = b.expenses
+        .filter((e) => {
+          const d = e.date ? new Date(e.date) : null;
+          return d != null && isSameMonth(d, monthDate);
+        })
+        .reduce((s, e) => s + e.amount, 0);
+      return sum + monthTotal;
+    }, 0);
+    return { month: format(monthDate, "MMM"), amount };
+  });
 
   const chartTotal = spendingData.reduce((sum, d) => sum + d.amount, 0);
 
