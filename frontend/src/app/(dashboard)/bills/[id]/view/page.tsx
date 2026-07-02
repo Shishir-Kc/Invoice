@@ -6,9 +6,10 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import { Input } from "@/components/ui/input";
 import { Separator } from "@/components/ui/separator";
 import { ArrowLeft, Edit, CheckCircle2, DollarSign, UserCheck, UserX, Loader2 } from "lucide-react";
-import { formatCurrency, formatDate, calculateTotalExpenses, calculateShare, calculateMemberBalance, calculateSettlements } from "@/lib/utils";
+import { formatCurrency, formatDate, calculateTotalExpenses, calculateShare, calculateSettlementsFromPaid } from "@/lib/utils";
 import { billApi } from "@/lib/api";
 import type { Bill } from "@/types";
 
@@ -24,6 +25,15 @@ export default function BillViewPage() {
 
   const settleMutation = useMutation({
     mutationFn: () => billApi.settle(params.id as string),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["bill", params.id] });
+      queryClient.invalidateQueries({ queryKey: ["bills"] });
+    },
+  });
+
+  const paidMutation = useMutation({
+    mutationFn: ({ memberId, paidAmount }: { memberId: string; paidAmount: number }) =>
+      billApi.togglePaid(params.id as string, memberId, paidAmount),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["bill", params.id] });
       queryClient.invalidateQueries({ queryKey: ["bills"] });
@@ -57,9 +67,16 @@ export default function BillViewPage() {
     );
   }
 
-  const total = calculateTotalExpenses(bill.expenses);
-  const share = calculateShare(total, bill.members.length);
-  const settlements = calculateSettlements(bill.members, bill.expenses, total);
+  const total = bill.totalCost ?? calculateTotalExpenses(bill.expenses);
+  const share = bill.share ?? calculateShare(total, bill.members.length);
+  const settlements = calculateSettlementsFromPaid(bill.members, share);
+  const memberExpenseTotals = (() => {
+    const map = new Map<string, number>();
+    for (const e of bill.expenses) {
+      map.set(e.paidBy, (map.get(e.paidBy) ?? 0) + e.amount);
+    }
+    return map;
+  })();
 
   return (
     <div className="space-y-6 max-w-4xl mx-auto">
@@ -108,7 +125,9 @@ export default function BillViewPage() {
           </CardHeader>
           <CardContent className="space-y-4">
             {bill.members.map((member) => {
-              const balance = calculateMemberBalance(member.id, bill.expenses, share);
+              const paidAmount = member.paidAmount ?? 0;
+              const owes = member.owes ?? Math.max(0, share - paidAmount);
+              const balance = paidAmount - share;
               return (
                 <div key={member.id} className="flex items-center justify-between">
                   <div className="flex items-center gap-3">
@@ -118,11 +137,8 @@ export default function BillViewPage() {
                     <div>
                       <p className="text-sm font-medium text-foreground">{member.name}</p>
                       <p className="text-xs text-muted-foreground">
-                        Paid {formatCurrency(
-                          bill.expenses
-                            .filter((e) => e.paidBy === member.id)
-                            .reduce((s, e) => s + e.amount, 0)
-                        )}
+                        Paid {formatCurrency(paidAmount)}
+                        {owes > 0 ? ` · owes ${formatCurrency(owes)}` : " · settled"}
                       </p>
                     </div>
                   </div>
@@ -141,7 +157,7 @@ export default function BillViewPage() {
             <Separator />
 
             <div className="flex items-center justify-between text-sm">
-              <span className="text-muted-foreground">Total spent</span>
+              <span className="text-muted-foreground">Total Cost</span>
               <span className="font-medium text-foreground">{formatCurrency(total)}</span>
             </div>
             <div className="flex items-center justify-between text-sm">
@@ -153,27 +169,64 @@ export default function BillViewPage() {
 
         <Card>
           <CardHeader>
-            <CardTitle className="text-base">Summary</CardTitle>
+            <CardTitle className="text-base">Payment Status</CardTitle>
           </CardHeader>
           <CardContent className="space-y-4">
+            <p className="text-xs text-muted-foreground">
+              Each member&apos;s share is {formatCurrency(bill.share ?? share)}. Record payments below.
+            </p>
             {bill.members.map((member) => {
-              const hasPaid = bill.expenses.some((e) => e.paidBy === member.id);
-              const memberTotal = bill.expenses
-                .filter((e) => e.paidBy === member.id)
-                .reduce((s, e) => s + e.amount, 0);
+              const paid = !!member.paid;
+              const paidAmount = member.paidAmount ?? 0;
+              const owes = member.owes ?? Math.max(0, (bill.share ?? share) - paidAmount);
               return (
-                <div key={member.id} className="flex items-center justify-between">
-                  <div className="flex items-center gap-2">
-                    {hasPaid ? (
-                      <UserCheck className="h-4 w-4 text-green-500" />
+                <div key={member.id} className="flex items-center justify-between gap-3">
+                  <div className="flex items-center gap-2 min-w-0">
+                    {paid ? (
+                      <UserCheck className="h-4 w-4 text-green-500 shrink-0" />
                     ) : (
-                      <UserX className="h-4 w-4 text-red-400" />
+                      <UserX className="h-4 w-4 text-red-400 shrink-0" />
                     )}
-                    <span className="text-sm text-foreground">{member.name}</span>
+                    <div className="min-w-0">
+                      <p className="text-sm text-foreground truncate">{member.name}</p>
+                      <p className="text-xs text-muted-foreground">
+                        Paid {formatCurrency(paidAmount)}
+                        {owes > 0 ? ` · owes ${formatCurrency(owes)}` : " · settled"}
+                      </p>
+                    </div>
                   </div>
-                  <span className="text-sm text-muted-foreground">
-                    {hasPaid ? formatCurrency(memberTotal) : "Hasn't paid"}
-                  </span>
+                  <div className="flex items-center gap-2 shrink-0">
+                    <Input
+                      type="number"
+                      min="0"
+                      step="0.01"
+                      defaultValue={paidAmount || ""}
+                      key={`${member.id}-${paidAmount}`}
+                      onBlur={(e) => {
+                        const amt = Math.max(0, Number(e.target.value) || 0);
+                        if (amt !== paidAmount) {
+                          paidMutation.mutate({ memberId: member.id, paidAmount: amt });
+                        }
+                      }}
+                      className="w-24"
+                      disabled={paidMutation.isPending}
+                      aria-label={`${member.name} paid amount`}
+                    />
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      disabled={paidMutation.isPending || paid}
+                      onClick={() =>
+                        paidMutation.mutate({
+                          memberId: member.id,
+                          paidAmount: bill.share ?? share,
+                        })
+                      }
+                    >
+                      Mark paid
+                    </Button>
+                  </div>
                 </div>
               );
             })}
@@ -189,18 +242,23 @@ export default function BillViewPage() {
           <div className="divide-y divide-border">
             {bill.expenses.map((expense) => {
               const payer = bill.members.find((m) => m.id === expense.paidBy);
+              const payerTotalExpenses = memberExpenseTotals.get(expense.paidBy) ?? 0;
+              const paidAmount = payer?.paidAmount ?? 0;
+              const isPaid = paidAmount >= payerTotalExpenses - 0.005;
               return (
                 <div key={expense.id} className="flex items-center justify-between px-6 py-3">
                   <div className="flex items-center gap-3">
                     <DollarSign className="h-4 w-4 text-muted-foreground" />
                     <div>
                       <p className="text-sm font-medium text-foreground">{expense.description}</p>
-                      <p className="text-xs text-muted-foreground">
-                        Paid by {payer?.name || "Unknown"} &middot; {formatDate(expense.date)}
-                      </p>
                     </div>
                   </div>
-                  <span className="text-sm font-medium text-foreground">{formatCurrency(expense.amount)}</span>
+                  <div className="flex items-center gap-3">
+                    <Badge variant={isPaid ? "success" : "destructive"}>
+                      {isPaid ? "Paid" : "Unpaid"}
+                    </Badge>
+                    <span className="text-sm font-medium text-foreground">{formatCurrency(expense.amount)}</span>
+                  </div>
                 </div>
               );
             })}

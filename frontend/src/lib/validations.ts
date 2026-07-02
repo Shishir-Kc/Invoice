@@ -4,6 +4,8 @@ export const memberSchema = z.object({
   id: z.string().optional(),
   name: z.string().min(1, "Name is required").max(100),
   email: z.string().email("Invalid email").optional().or(z.literal("")),
+  paid: z.boolean().optional(),
+  paidAmount: z.number().min(0).optional(),
 });
 
 export const expenseSchema = z.object({

@@ -62,6 +62,25 @@ export function calculateSettlements(
     balance: calculateMemberBalance(m.id, expenses, share),
   }));
 
+  return buildSettlementsFromBalances(balances);
+}
+
+export function calculateSettlementsFromPaid(
+  members: Member[],
+  share: number
+): Settlement[] {
+  const balances = members.map((m) => ({
+    id: m.id,
+    name: m.name,
+    balance: (m.paidAmount ?? 0) - share,
+  }));
+
+  return buildSettlementsFromBalances(balances);
+}
+
+function buildSettlementsFromBalances(
+  balances: { id: string; name: string; balance: number }[]
+): Settlement[] {
   const debtors = balances.filter((b) => b.balance < 0).sort((a, b) => a.balance - b.balance);
   const creditors = balances.filter((b) => b.balance > 0).sort((a, b) => b.balance - a.balance);
 

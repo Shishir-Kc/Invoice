@@ -66,6 +66,9 @@ export const billApi = {
 
   settle: (id: string) =>
     api.post<ApiResponse<Bill>>(`/bills/${id}/settle`),
+
+  togglePaid: (id: string, memberId: string, paidAmount: number) =>
+    api.patch<ApiResponse<Bill>>(`/bills/${id}/paid`, { memberId, paidAmount }),
 };
 
 export const authApi = {

@@ -1,0 +1,91 @@
+{
+	"$schema": "node_modules/wrangler/config-schema.json",
+	"name": "invoicely-api",
+	"main": "src/index.ts",
+	"compatibility_date": "2025-06-30",
+	"compatibility_flags": [
+		"nodejs_compat"
+	],
+	"observability": {
+		"enabled": true
+	},
+	// Custom domain deferred for now — using the default workers.dev subdomain.
+	// To attach a custom hostname later, add a `routes` entry, e.g.:
+	//   "routes": [{ "pattern": "api.shishirkhatri.com.np/*", "zone_name": "shishirkhatri.com.np" }]
+	"workers_dev": true,
+	// Routes: api.shishirkhatri.com.np/* -> this Worker. Set the custom domain
+	// in the dashboard or via `wrangler` triggers.
+	"d1_databases": [
+		{
+			"binding": "DB",
+			"database_name": "invoicely",
+			"database_id": "d56c3f89-183b-499a-b64b-18f816b6cbe6",
+			"migrations_dir": "migrations"
+		}
+	],
+	// Workers Rate Limit binding. In-process limiters don't survive across
+	// isolates, so we use the platform binding. namespace_id is an arbitrary
+	// per-limiter integer.
+	"unsafe": {
+		"bindings": [
+			{
+				"name": "LOGIN_RATE_LIMITER",
+				"type": "ratelimit",
+				"namespace_id": "1001",
+				"simple": {
+					"limit": 10,
+					"period": 60
+				}
+			},
+			{
+				"name": "JOIN_RATE_LIMITER",
+				"type": "ratelimit",
+				"namespace_id": "1002",
+				"simple": {
+					"limit": 5,
+					"period": 60
+				}
+			}
+		]
+	},
+	"vars": {
+		// The actual frontend origin. Also used to build invite join links
+		// (/join?token=...). Points at the custom domain now that it's attached.
+		"FRONTEND_URL": "https://invoicely.shishirkhatri.com.np",
+		// Explicit CORS allowlist (the fallback in code also adds localhost:3000).
+		// Frontend and backend now share the registrable domain shishirkhatri.com.np
+		// (invoicely.shishirkhatri.com.np + api.invoicely.shishirkhatri.com.np).
+		"CORS_ORIGINS": "https://invoicely.shishirkhatri.com.np,https://invoicely.kc-dev-py.workers.dev",
+		"HYPER_API_URL": "https://api.arcademia.app",
+		"COOKIE_NAME": "invoicely_session",
+		// --- same-registrable-domain cookie config ---
+		// Frontend (invoicely.shishirkhatri.com.np) and backend
+		// (api.invoicely.shishirkhatri.com.np) share shishirkhatri.com.np, so a
+		// single cookie scoped to Domain=.shishirkhatri.com.np with SameSite=Lax
+		// is sent cross-subdomain automatically. More secure than SameSite=None.
+		"COOKIE_DOMAIN": ".shishirkhatri.com.np",
+		"COOKIE_SAMESITE": "lax",
+		"COOKIE_SECURE": "true",
+		"COOKIE_MAX_AGE": "2592000"
+	},
+	// Secrets — set with: wrangler secret put LEGACY_ACCESS_KEY
+	// Never commit real secret values.
+	"env": {
+		"dev": {
+			"name": "invoicely-api-dev",
+			"vars": {
+				"FRONTEND_URL": "http://localhost:3000",
+				"COOKIE_DOMAIN": "",
+				"COOKIE_SECURE": "false"
+			},
+			"d1_databases": [
+				{
+					"binding": "DB",
+					"database_name": "invoicely-dev",
+					"database_id": "3e4a68d0-865b-4339-b9c1-d9aa6b8511ea",
+					"migrations_dir": "migrations"
+				}
+			]
+		}
+	}
+}

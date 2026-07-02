@@ -31,9 +31,34 @@ export default function CreateBillPage() {
   const [description, setDescription] = useState("");
   const [members, setMembers] = useState<Member[]>([]);
   const [expenses, setExpenses] = useState<Expense[]>([emptyExpense()]);
+  // Amount each selected member has paid toward their share (dollars). Kept as
+  // a Map<memberId, amount> so MemberPicker can keep owning the members array
+  // without wiping entered amounts on every change.
+  const [paidAmounts, setPaidAmounts] = useState<Map<string, number>>(new Map());
   const [error, setError] = useState<string | null>(null);
 
   const selectedIds = members.map((m) => m.id);
+
+  // Keep paidAmounts in sync with selected members: drop entries for members
+  // that are no longer selected.
+  const handleMembersChange = (next: Member[]) => {
+    setMembers(next);
+    setPaidAmounts((prev) => {
+      const ids = new Set(next.map((m) => m.id));
+      const filtered = new Map<string, number>();
+      for (const [id, amt] of prev) if (ids.has(id)) filtered.set(id, amt);
+      return filtered;
+    });
+  };
+
+  const setPaidAmount = (id: string, amount: number) =>
+    setPaidAmounts((prev) => {
+      const next = new Map(prev);
+      next.set(id, Math.max(0, amount || 0));
+      return next;
+    });
+
+  const markPaid = (id: string) => setPaidAmount(id, share);
 
   const addExpense = () => setExpenses([...expenses, emptyExpense()]);
   const removeExpense = (id: string) => {
@@ -76,7 +101,12 @@ export default function CreateBillPage() {
     const input: CreateBillInput = {
       title,
       description: description || undefined,
-      members: members.map((m) => ({ id: m.id, name: m.name, email: m.email || "" })),
+      members: members.map((m) => ({
+        id: m.id,
+        name: m.name,
+        email: m.email || "",
+        paidAmount: paidAmounts.get(m.id) ?? 0,
+      })),
       expenses: expenses.map((e) => ({
         description: e.description,
         amount: e.amount,
@@ -147,12 +177,63 @@ export default function CreateBillPage() {
             <MemberPicker
               selectedIds={selectedIds}
               selected={members}
-              onChange={setMembers}
+              onChange={handleMembersChange}
             />
             {members.length === 0 && (
               <p className="text-xs text-muted-foreground mt-3">
                 Select at least one member to split this bill.
               </p>
+            )}
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-base">Payments</CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-2">
+            <p className="text-xs text-muted-foreground">
+              Enter how much each member has paid toward their share (Rs {share.toFixed(2)} each).
+            </p>
+            {members.length === 0 ? (
+              <p className="text-xs text-muted-foreground">
+                Select at least one member first.
+              </p>
+            ) : (
+              <div className="rounded-md border border-border divide-y divide-border">
+                {members.map((m) => {
+                  const paid = paidAmounts.get(m.id) ?? 0;
+                  const owes = Math.max(0, share - paid);
+                  return (
+                    <div key={m.id} className="flex items-center gap-3 px-3 py-2.5">
+                      <div className="flex-1 min-w-0">
+                        <p className="text-sm font-medium text-foreground truncate">{m.name}</p>
+                        <p className="text-xs text-muted-foreground">
+                          Owes {formatCurrency(owes)}
+                        </p>
+                      </div>
+                      <Input
+                        type="number"
+                        min="0"
+                        step="0.01"
+                        value={paid || ""}
+                        onChange={(e) => setPaidAmount(m.id, Number(e.target.value))}
+                        className="w-28"
+                        placeholder="0"
+                      />
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        className="shrink-0"
+                        onClick={() => markPaid(m.id)}
+                      >
+                        Mark paid
+                      </Button>
+                    </div>
+                  );
+                })}
+              </div>
             )}
           </CardContent>
         </Card>
@@ -219,7 +300,7 @@ export default function CreateBillPage() {
             <div className="flex justify-end">
               <div className="w-full max-w-xs space-y-2">
                 <div className="flex justify-between text-sm">
-                  <span className="text-muted-foreground">Total</span>
+                  <span className="text-muted-foreground">Total Cost</span>
                   <span className="text-foreground font-medium">{formatCurrency(total)}</span>
                 </div>
                 <div className="flex justify-between text-sm">

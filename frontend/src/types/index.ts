@@ -2,6 +2,12 @@ export interface Member {
   id: string;
   name: string;
   email?: string;
+  /** How much this member has paid toward their share (dollars). */
+  paidAmount?: number;
+  /** Derived: paidAmount >= share. */
+  paid?: boolean;
+  /** Derived: max(0, share - paidAmount) — what they still owe. */
+  owes?: number;
 }
 
 export interface MemberWithStats extends Member {
@@ -54,6 +60,10 @@ export interface Bill {
   members: Member[];
   expenses: Expense[];
   status: BillStatus;
+  /** Total cost of the bill (sum of expenses). */
+  totalCost: number;
+  /** Equal per-member share = totalCost / memberCount. */
+  share: number;
   createdAt: string;
   updatedAt: string;
 }

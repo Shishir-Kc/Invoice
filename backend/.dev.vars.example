@@ -1,0 +1,5 @@
+# Local dev secrets for `wrangler dev`. Copy to `.dev.vars` and fill in.
+# In production, set these with `wrangler secret put <NAME>`.
+
+# Legacy header-key auth for GET /auth. Unset = endpoint disabled (fail-closed).
+LEGACY_ACCESS_KEY=dev-only-change-me

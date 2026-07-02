@@ -26,11 +26,11 @@
 		"binding": "IMAGES"
 	},
 	// NEXT_PUBLIC_API_URL is a Next.js build-time var (inlined into the JS
-	// bundle at build time). Set it in the Cloudflare dashboard under
-	// Settings > Environment variables so it's available during the build.
+	// bundle at build time). Set it in .env.production (or the Cloudflare
+	// dashboard build env) so it's available during the build.
 	// It must include the full API path, e.g.:
 	//   https://api.<your-backend-domain>/api/v1/invoicely
 	"vars": {
-		"NEXT_PUBLIC_API_URL": "https://api.yourdomain.com/api/v1/invoicely"
+		"NEXT_PUBLIC_API_URL": "https://api.invoicely.shishirkhatri.com.np/api/v1/invoicely"
 	}
 }
