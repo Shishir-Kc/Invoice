@@ -250,7 +250,10 @@ export default function BillViewPage() {
                   <div className="flex items-center gap-3">
                     <DollarSign className="h-4 w-4 text-muted-foreground" />
                     <div>
-                      <p className="text-sm font-medium text-foreground">{expense.description}</p>
+                      <p className="text-sm font-medium text-foreground">{payer?.name || expense.description}</p>
+                      {payer && (
+                        <p className="text-xs text-muted-foreground">{expense.description}</p>
+                      )}
                     </div>
                   </div>
                   <div className="flex items-center gap-3">
